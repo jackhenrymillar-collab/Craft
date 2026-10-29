@@ -178,7 +178,24 @@ void PadVoice::triggerAtPoint (double velocity, Vec2 p) noexcept
                           ? std::sqrt (2.0 * 9.81 * dropHeight (velocity, params.force))
                           : strikeSpeed (velocity, params.force) * model.speedScale;
     hitter.start (active, shape, v0, model);
+    if (asleep)
+        updateAirMic (1.0); // nothing is sounding: jump straight to the mic's place
     asleep = false;
+}
+
+void PadVoice::updateAirMic (double smooth) noexcept
+{
+    // Air mic geometry, smoothed per block so moving it doesn't zip.
+    const double dist = std::clamp (params.micDistance, 0.05, 5.0);
+    const double targetDelay = std::min ((double) kMaxDelay - 4.0, dist / kSpeedOfSound * sampleRate);
+    // Air absorbs highs, and a mic a little way off hears the part as a whole rather than
+    // the click at the contact point: two gentle poles, lower with distance.
+    const double fc = 14000.0 / (1.0 + 0.8 * dist);
+    const double targetCoeff = 1.0 - std::exp (-2.0 * std::numbers::pi * std::min (fc, 0.45 * sampleRate) / sampleRate);
+    const double targetLevel = std::min (3.0, 0.5 / std::max (dist, 0.1));
+    delaySamples += (targetDelay - delaySamples) * smooth;
+    airCoeff += (targetCoeff - airCoeff) * smooth;
+    airLevel += (targetLevel - airLevel) * smooth;
 }
 
 double PadVoice::renderSample() noexcept
@@ -258,18 +275,7 @@ void PadVoice::process (float* left, float* right, int n) noexcept
     const double gl = params.level * std::cos (angle) * std::numbers::sqrt2;
     const double gr = params.level * std::sin (angle) * std::numbers::sqrt2;
 
-    // Air mic geometry, smoothed per block so moving it doesn't zip.
-    const double dist = std::clamp (params.micDistance, 0.05, 5.0);
-    const double targetDelay = std::min ((double) kMaxDelay - 4.0, dist / kSpeedOfSound * sampleRate);
-    // Air absorbs highs, and a mic a little way off hears the part as a whole rather than
-    // the click at the contact point: two gentle poles, lower with distance.
-    const double fc = 14000.0 / (1.0 + 0.8 * dist);
-    const double targetCoeff = 1.0 - std::exp (-2.0 * std::numbers::pi * std::min (fc, 0.45 * sampleRate) / sampleRate);
-    const double targetLevel = std::min (3.0, 0.5 / std::max (dist, 0.1));
-    const double smooth = asleep ? 1.0 : std::min (1.0, n / (0.03 * sampleRate));
-    delaySamples += (targetDelay - delaySamples) * smooth;
-    airCoeff += (targetCoeff - airCoeff) * smooth;
-    airLevel += (targetLevel - airLevel) * smooth;
+    updateAirMic (std::min (1.0, n / (0.03 * sampleRate)));
 
     double blockPeak = 0.0;
     for (int i = 0; i < n; ++i)

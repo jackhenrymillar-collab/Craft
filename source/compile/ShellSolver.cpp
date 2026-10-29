@@ -56,21 +56,34 @@ ShellBasis::ShellBasis (const Params& p) : params (p)
     const double f0 = 0.218 * (p.wall / (a * a)) * std::sqrt (p.youngs / p.density) * (1.0 + 0.5 * p.profile);
     const double w0 = 2.0 * kPi * f0;
 
+    // Radial profiles rho^2 cos(n pi (1 - rho)), made orthonormal (weight rho d rho) by
+    // Gram-Schmidt so modes of the same m stay mass-orthogonal.
     radial.resize (kMaxN + 1);
-    std::vector<double> radialNorm (kMaxN + 1);
+    auto weight = [] (int i) { return ((i == 0 || i == kTable) ? 1.0 : (i % 2 ? 4.0 : 2.0)) * i / (3.0 * kTable * kTable); };
+    auto dot = [&] (const std::vector<double>& x, const std::vector<double>& y) {
+        double s = 0.0;
+        for (int i = 0; i <= kTable; ++i) s += weight (i) * x[(size_t) i] * y[(size_t) i];
+        return s;
+    };
     for (int n = 0; n <= kMaxN; ++n)
     {
         auto& t = radial[(size_t) n];
         t.resize (kTable + 1);
-        double s = 0.0;
         for (int i = 0; i <= kTable; ++i)
         {
             const double rho = (double) i / kTable;
             t[(size_t) i] = rho * rho * std::cos (n * kPi * (1.0 - rho));
-            const double w = (i == 0 || i == kTable) ? 1.0 : (i % 2 ? 4.0 : 2.0);
-            s += w * t[(size_t) i] * t[(size_t) i] * rho;
         }
-        radialNorm[(size_t) n] = s / (3.0 * kTable); // integral of R^2 rho d rho
+        for (int j = 0; j < n; ++j)
+        {
+            const double c = dot (t, radial[(size_t) j]);
+            for (int i = 0; i <= kTable; ++i) t[(size_t) i] -= c * radial[(size_t) j][(size_t) i];
+        }
+        const double g = 1.0 / std::sqrt (dot (t, t));
+        for (auto& v : t) v *= g;
+        // Keep the rim moving "up" for every profile.
+        if (t.back() < 0.0)
+            for (auto& v : t) v = -v;
     }
 
     struct Cand { int m, n; double w; };
@@ -88,8 +101,8 @@ ShellBasis::ShellBasis (const Params& p) : params (p)
     for (const auto& c : cands)
     {
         if ((int) modes.size() + 2 > cap) break;
-        // Modal mass: sigma * a^2 * pi (angular cos^2 / sin^2) * integral R^2 rho d rho.
-        const double norm = 1.0 / std::sqrt (sigma * a * a * kPi * radialNorm[(size_t) c.n]);
+        // Modal mass: sigma * a^2 * pi (angular cos^2 / sin^2) * integral R^2 rho d rho (= 1).
+        const double norm = 1.0 / std::sqrt (sigma * a * a * kPi);
         const double split = 1.0 + 0.0012 * c.m; // casting asymmetry: the sin twin a touch higher
         modes.push_back ({ c.m, c.n, false, c.w, norm, c.n });
         modes.push_back ({ c.m, c.n, true, c.w * split, norm, c.n });

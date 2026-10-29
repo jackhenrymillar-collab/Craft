@@ -73,6 +73,7 @@ public:
 private:
     double nextRandom() noexcept;
     double renderSample() noexcept;
+    void updateAirMic (double smooth) noexcept;
 
     double sampleRate = 48000.0, dt = 1.0 / 48000.0;
     PadParams params;

@@ -118,13 +118,14 @@ void StripBasis::radiation (std::vector<double>& volume, std::vector<double>& dx
 
 double barThicknessProfile (double xi, double undercut) noexcept
 {
-    // A marimba-style arch cut under the middle 70 % of the bar, up to 75 % of the thickness.
+    // A marimba-style arch cut under the middle 70 % of the bar, up to 55 % of the thickness, which
+    // at full Undercut lands the first overtone on the marimba's 1 : 4.
     const double u = std::clamp (undercut, 0.0, 1.0);
     const double d = std::abs (xi - 0.5) / 0.35;
     if (d >= 1.0 || u <= 0.0)
         return 1.0;
     const double bump = 0.5 * (1.0 + std::cos (kPi * d));
-    return 1.0 - 0.75 * u * bump;
+    return 1.0 - 0.55 * u * bump;
 }
 
 // ---- Bar ---------------------------------------------------------------------------------
@@ -221,6 +222,7 @@ std::shared_ptr<StripBasis> makeBarBasis (const PartSpec& spec, const Material& 
         meanTau /= G + 1;
         const double tt = t * meanTau;
         const double c = std::sqrt (12.0 * Gm * beta * tt * tt / (rho * (w * w + tt * tt)));
+        std::vector<std::shared_ptr<const beam::Table>> torsionTables;
         for (int n = 1; n <= 16; ++n)
         {
             const bool freeEnds = ends == beam::Ends::FreeFree;
@@ -236,6 +238,30 @@ std::shared_ptr<StripBasis> makeBarBasis (const PartSpec& spec, const Material& 
                 }));
             else
                 tb = beam::table (beam::Ends::FixedFree, n - 1);
+            if (undercut > 0.0)
+            {
+                // Re-orthonormalise against the undercut's mass profile (Gram-Schmidt).
+                beam::Table t2 = *tb;
+                for (const auto& prev : torsionTables)
+                {
+                    const double c2 = beam::integrate (t2.X, prev->X, &tau);
+                    for (int g = 0; g <= G; ++g)
+                    {
+                        t2.X[(size_t) g] -= c2 * prev->X[(size_t) g];
+                        t2.dX[(size_t) g] -= c2 * prev->dX[(size_t) g];
+                        t2.ddX[(size_t) g] -= c2 * prev->ddX[(size_t) g];
+                    }
+                }
+                const double g2 = 1.0 / std::sqrt (beam::integrate (t2.X, t2.X, &tau));
+                for (int g = 0; g <= G; ++g)
+                {
+                    t2.X[(size_t) g] *= g2;
+                    t2.dX[(size_t) g] *= g2;
+                    t2.ddX[(size_t) g] *= g2;
+                }
+                tb = std::make_shared<const beam::Table> (std::move (t2));
+            }
+            torsionTables.push_back (tb);
             StripBasis::Mode m;
             m.omega = om;
             m.torsion = true;
