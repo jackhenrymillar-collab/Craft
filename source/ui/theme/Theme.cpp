@@ -46,6 +46,32 @@ void drawSectionLabel (juce::Graphics& g, const juce::String& text, juce::Rectan
     g.drawText (text.toUpperCase(), area, just, false);
 }
 
+juce::Colour materialColour (foundry::MaterialId m)
+{
+    using foundry::MaterialId;
+    switch (m)
+    {
+        case MaterialId::Steel:      return juce::Colour (0xff9ea3a6);
+        case MaterialId::Bronze:     return juce::Colour (0xffb07a3b);
+        case MaterialId::Aluminium:  return juce::Colour (0xffc9ccd0);
+        case MaterialId::Brass:      return juce::Colour (0xffc9a74a);
+        case MaterialId::Glass:      return juce::Colour (0xffa9d4d9);
+        case MaterialId::Ceramic:    return juce::Colour (0xffe8e2d6);
+        case MaterialId::Slate:      return juce::Colour (0xff5a6168);
+        case MaterialId::Ice:        return juce::Colour (0xffcfe8f2);
+        case MaterialId::Oak:        return juce::Colour (0xffa87b4f);
+        case MaterialId::Spruce:     return juce::Colour (0xffd9b98a);
+        case MaterialId::Bamboo:     return juce::Colour (0xffc7b36a);
+        case MaterialId::Rubber:     return juce::Colour (0xff3a3a37);
+        case MaterialId::Hide:       return juce::Colour (0xffd9c39a);
+        case MaterialId::Mylar:      return juce::Colour (0xffe9e6dc);
+        case MaterialId::Paper:      return juce::Colour (0xffe8dcc0);
+        case MaterialId::Hyperglass: return juce::Colour (0xff8fe3ff);
+        case MaterialId::Count:      break;
+    }
+    return juce::Colours::grey;
+}
+
 void drawCuttingMat (juce::Graphics& g, juce::Rectangle<float> area, juce::Point<float> origin)
 {
     g.setColour (colour::mat);

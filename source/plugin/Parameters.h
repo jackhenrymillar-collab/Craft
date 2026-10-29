@@ -16,6 +16,13 @@ inline constexpr const char* position = "p1_position";
 inline constexpr const char* tune = "p1_tune";
 inline constexpr const char* level = "p1_level";
 inline constexpr const char* pan = "p1_pan";
+inline constexpr const char* airMix = "p1_airMix";
+inline constexpr const char* micDistance = "p1_micDistance";
+// The part's three shape controls (meaning depends on the part type, see PartCatalogue).
+inline constexpr const char* shapeA = "p1_shapeA";
+inline constexpr const char* shapeB = "p1_shapeB";
+inline constexpr const char* shapeC = "p1_shapeC";
+inline constexpr const char* const shape[3] = { shapeA, shapeB, shapeC };
 
 inline constexpr const char* ageAmount = "p1_ageAmount";
 inline constexpr const char* ageClimate = "p1_ageClimate";
@@ -39,6 +46,10 @@ bool affectsModes (const juce::String& paramId);
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
 // State-tree properties for structural (non-automatable) choices.
-inline const juce::Identifier headMaterial { "headMaterial" };
+inline const juce::Identifier partType { "partType" };
+inline const juce::Identifier material { "material" };
+inline const juce::Identifier mount { "mount" };
+inline const juce::Identifier striker { "striker" };
+inline const juce::Identifier headMaterial { "headMaterial" }; // M1 sessions: membrane material
 
 } // namespace foundry::params

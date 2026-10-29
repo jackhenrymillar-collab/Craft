@@ -18,7 +18,7 @@ std::unique_ptr<juce::AudioParameterFloat> percent (const char* pid, const juce:
 
 bool affectsModes (const juce::String& p)
 {
-    return p == id::tune || p.startsWith ("p1_age") || p.startsWith ("p1_deform") || p.startsWith ("p1_twist")
+    return p == id::tune || p.startsWith ("p1_shape") || p.startsWith ("p1_age") || p.startsWith ("p1_deform") || p.startsWith ("p1_twist")
         || p.startsWith ("p1_puncture");
 }
 
@@ -45,6 +45,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
             if (std::abs (v) < 0.005f) return juce::String ("C");
             return juce::String (juce::roundToInt (std::abs (v) * 100.0f)) + (v < 0 ? " L" : " R");
         })));
+
+    pad->addChild (percent (id::airMix, "Air Mic Mix", 0.5f));
+    pad->addChild (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::micDistance, 1 }, "Air Mic Distance",
+        juce::NormalisableRange<float> (0.1f, 3.0f, 0.0f, 0.5f), 0.5f,
+        juce::AudioParameterFloatAttributes().withLabel ("m").withStringFromValueFunction (
+            [] (float v, int) { return v < 1.0f ? juce::String (juce::roundToInt (v * 100.0f)) + " cm" : juce::String (v, 2) + " m"; })));
+
+    // Shape controls: stored 0..1; the editor shows them in the part's own units.
+    auto shape = std::make_unique<juce::AudioProcessorParameterGroup> ("shape1", "Pad 1 Shape", " | ");
+    const char* shapeNames[] = { "Shape A", "Shape B", "Shape C" };
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto& def = partInfo (PartType::Membrane).controls[(size_t) i];
+        shape->addChild (percent (id::shape[i], shapeNames[i], (float) def.defaultNormalised()));
+    }
 
     auto treat = std::make_unique<juce::AudioProcessorParameterGroup> ("treat1", "Pad 1 Treatments", " | ");
     treat->addChild (percent (id::ageAmount, "Age", 0.0f));
@@ -83,7 +99,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     treat->addChild (percent (id::punctureScatter, "Puncture Scatter", 0.5f));
     treat->addChild (percent (id::punctureRagged, "Puncture Ragged", 0.3f));
 
-    layout.add (std::move (pad), std::move (treat));
+    layout.add (std::move (pad), std::move (shape), std::move (treat));
     return layout;
 }
 

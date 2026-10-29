@@ -20,7 +20,7 @@ target_sources(Foundry PRIVATE
     Parameters.cpp
     ../ui/theme/Theme.cpp
     ../ui/theme/FoundryLookAndFeel.cpp
-    ../ui/common/HeadView.cpp
+    ../ui/common/PartView.cpp
     ../ui/kit/KitView.cpp)
 
 target_compile_definitions(Foundry PUBLIC

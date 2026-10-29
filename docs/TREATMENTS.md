@@ -27,9 +27,9 @@ modes die faster than others.
 | Treatment | Controls | What it does physically |
 |---|---|---|
 | **Age** | Amount, Climate (dry ↔ damp) | Per-material rules: global stiffness/mass/loss drift, a smooth random unevenness field (uneven tension/thickness), pits (material lost), cracks (stiffness lost + friction), and grit. |
-| **Deform** | Intensity, Size, Density | Gaussian dents (75 %) and bumps (25 %). On a tensioned head a dent is a stretched slack spot: local tension drops and it adds loss. Solid parts (M2) will stiffen instead (shallow-shell effect). |
+| **Deform** | Intensity, Size, Density | Gaussian dents (75 %) and bumps (25 %). On a tensioned head a dent is a stretched slack spot: local tension drops and it adds loss. On solid parts (bars, plates, shells, tubes, springs, box faces) a dent stiffens instead (shallow-shell effect). |
 | **Twist** | Amount (±), Pivot, Focus, Wrinkle | Torsional shear stress about a pivot (τ ∝ r₀²/(ρ² + r₀²)), plus second-order stretching ∝ twist², which tightens the part where the twist is strongest. Wrinkle adds fine ridges of uneven stress with extra loss and buzz. |
-| **Puncture** | Holes, Size, Place, Scatter, Ragged | Removes mass and stiffness inside each hole; a torn rim adds loss and rattle. Holes sit on a ring (Place = radius) and Scatter blends them toward random positions. |
+| **Puncture** | Holes, Size, Place, Scatter, Ragged | Removes mass and stiffness inside each hole; a torn rim adds loss and rattle. Holes sit on a ring (Place = centre → edge, following the part's outline) and Scatter blends them toward random positions. |
 
 ## Age rules (at Age = 1, dry → damp)
 
@@ -49,7 +49,7 @@ modes die faster than others.
 
 All numbers live in `source/model/Materials.cpp` and are meant to be tuned by ear.
 
-## Limits (M1)
+## Limits
 
 - First-order physics in a truncated basis: large holes are approximate (a real hole changes the
   boundary conditions; here it removes mass/stiffness within the solved modes).

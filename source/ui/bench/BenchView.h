@@ -1,11 +1,11 @@
 #pragma once
 
 #include "plugin/PluginProcessor.h"
-#include "ui/common/HeadView.h"
+#include "ui/common/PartView.h"
 
 namespace foundry
 {
-// Placeholder for the M5 bench: the cutting mat with this pad's drum on it (tap-testable).
+// Placeholder for the M5 bench: the cutting mat with this pad's part on it (tap-testable).
 class BenchView final : public juce::Component
 {
 public:
@@ -27,7 +27,7 @@ public:
         g.setColour (colour::textMuted);
         g.drawFittedText ("Resonators, joints, loose objects and exciters arrive with the full bench (M5).",
                           bin.reduced (14, 36).removeFromTop (80), juce::Justification::topLeft, 4);
-        g.drawFittedText ("Click anywhere on the head to tap-test it there.",
+        g.drawFittedText ("Click anywhere on the part to tap-test it there.",
                           inspector.reduced (14, 36).removeFromTop (60), juce::Justification::topLeft, 3);
     }
 
@@ -40,7 +40,7 @@ public:
     }
 
 private:
-    HeadView head;
+    PartView head;
     juce::Rectangle<int> bin, inspector;
 };
 } // namespace foundry

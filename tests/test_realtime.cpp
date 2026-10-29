@@ -70,3 +70,40 @@ TEST_CASE ("The audio path does not allocate", "[realtime]")
     CHECK (allocations.load() == 0);
 #endif
 }
+
+TEST_CASE ("Every part and striker plays without allocating", "[realtime]")
+{
+#ifdef FOUNDRY_ASAN
+    SKIP ("allocation counting is disabled under AddressSanitizer");
+#else
+    std::vector<std::unique_ptr<CompiledInstrument>> parts;
+    for (int t = 0; t < kNumPartTypes; ++t)
+    {
+        auto spec = test::defaultSpec();
+        spec.part = PartSpec::defaultFor ((PartType) t);
+        spec.treatments.deform.intensity = 0.4;
+        parts.push_back (compileInstrument (spec, 48000.0));
+    }
+    PadVoice v;
+    v.prepare (48000.0);
+    v.setInstrument (parts[0].get());
+    float l[128] {}, r[128] {};
+
+    allocations = 0;
+    counting = true;
+    for (int i = 0; i < 700; ++i)
+    {
+        PadParams p;
+        p.striker = (StrikerType) ((i / 25) % kNumStrikerTypes);
+        p.airMix = 0.5;
+        p.micDistance = 0.3 + 0.01 * (i % 50);
+        v.setParams (p);
+        if (i % 25 == 0) v.trigger (0.9);
+        if (i % 100 == 50) v.setInstrument (parts[(size_t) ((i / 100) % parts.size())].get());
+        v.process (l, r, 128);
+        (void) v.takeRetired();
+    }
+    counting = false;
+    CHECK (allocations.load() == 0);
+#endif
+}
