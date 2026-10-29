@@ -24,6 +24,11 @@ public:
     // Advance one sample with force F (newtons) applied at a point with the given shape.
     void step (const double* shape, double force) noexcept;
     void stepFree() noexcept;
+    // Advance one sample with a force already projected onto the modes (size n).
+    void stepForces (const double* modalForce) noexcept;
+    // predictFree / velocityAt over only the first m modes (contacts).
+    [[nodiscard]] double predictFreePartial (const double* shape, int m) const noexcept;
+    [[nodiscard]] double velocityPartial (const double* shape, int m) const noexcept;
 
     [[nodiscard]] double displacementAt (const double* shape) const noexcept;
     [[nodiscard]] double velocityAt (const double* shape) const noexcept;

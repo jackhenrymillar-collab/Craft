@@ -9,9 +9,10 @@
 namespace foundry
 {
 
-// Instrument description for one pad: one resonating part, where it's struck, and how it's
-// picked up. This becomes a ValueTree-backed graph with joints at M3+; the compile step
-// reads this plain struct so it can run on any thread.
+// Instrument description for one pad: a main resonating part, optionally a second part joined
+// to it, things that rattle against it or rest on it, where it's struck and how it's picked up.
+// The compile step reads this plain struct so it can run on any thread. (It becomes a full
+// graph of parts and joints with the Bench view in M5.)
 
 struct PartSpec
 {
@@ -52,9 +53,38 @@ struct MicSpec
     // The air mic's mix and distance are live voice controls (PadParams), not compiled.
 };
 
+// A second part joined to the main one (a bar bolted to a box, a plate hung from a spring).
+// The joint couples the two parts' modes in the compile step.
+struct AttachSpec
+{
+    bool enabled = false;
+    PartSpec part = PartSpec::defaultFor (PartType::Box);
+    JointType joint = JointType::Bolt;
+    double stiffness = 0.5;        // 0..1 within the joint type's range
+    double place = 0.6;            // where on the main part: 0 centre .. 1 edge
+};
+
+// Snare wires or sizzle rivets against the main part. How loose they are is a live control
+// (PadParams::rattle); the layout is compiled.
+struct RattleSpec
+{
+    RattleType type = RattleType::None;
+};
+
+// Loose objects resting on the main part.
+struct LooseSpec
+{
+    LooseType type = LooseType::None;
+    double amount = 0.5;           // 0..1: how many
+};
+
 struct InstrumentSpec
 {
     PartSpec part = PartSpec::defaultFor (PartType::Membrane);
+    AttachSpec attach;
+    RattleSpec rattle;
+    LooseSpec loose;
+    bool oversample = false;       // run the pad at 2x the host rate (cleaner buzz and rattles)
     PointPolar strike { 0.3, 0.0 };
     double strikeSpread = 0.05;    // random radial/angle jitter per hit (fraction of size)
     MicSpec mic;

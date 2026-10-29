@@ -7,9 +7,13 @@
 namespace foundry
 {
 
-constexpr int kMaxExactModes = 128; // modes solved exactly per part
-constexpr int kMaxHighModes = 128;  // statistical high band
-constexpr int kMaxModes = kMaxExactModes + kMaxHighModes;
+constexpr int kMaxExactModes = 128;  // modes solved exactly per part
+constexpr int kMaxAttachModes = 48;  // modes of a second, joined part
+constexpr int kMaxHighModes = 128;   // statistical high band
+constexpr int kMaxCombinedExact = kMaxExactModes + kMaxAttachModes;
+constexpr int kMaxModes = kMaxCombinedExact + kMaxHighModes;
+constexpr int kMaxContactModes = 64; // lowest modes that rattles and loose objects push on
+constexpr int kMaxContacts = 48;     // snare wires + rivets + loose objects
 
 struct Vec2
 {

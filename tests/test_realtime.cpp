@@ -107,3 +107,51 @@ TEST_CASE ("Every part and striker plays without allocating", "[realtime]")
     CHECK (allocations.load() == 0);
 #endif
 }
+
+TEST_CASE ("Joints, rattles, loose objects, sweeps and oversampling play without allocating", "[realtime]")
+{
+#ifdef FOUNDRY_ASAN
+    SKIP ("allocation counting is disabled under AddressSanitizer");
+#else
+    std::vector<std::unique_ptr<CompiledInstrument>> ins;
+    {
+        auto s = test::defaultSpec();
+        s.part = PartSpec::defaultFor (PartType::Plate);
+        s.rattle.type = RattleType::Snare;
+        s.loose.type = LooseType::Rice;
+        ins.push_back (compileInstrument (s, 48000.0));
+        s.attach.enabled = true;
+        s.attach.part = PartSpec::defaultFor (PartType::Box);
+        ins.push_back (compileInstrument (s, 48000.0));
+        s.oversample = true;
+        s.rattle.type = RattleType::Sizzle;
+        s.loose.type = LooseType::Chain;
+        ins.push_back (compileInstrument (s, 48000.0));
+        s.oversample = false;
+        s.attach.joint = JointType::Rubber;
+        s.loose.type = LooseType::Beads;
+        ins.push_back (compileInstrument (s, 48000.0));
+    }
+    PadVoice v;
+    v.prepare (48000.0);
+    v.setInstrument (ins[0].get());
+    float l[128] {}, r[128] {};
+
+    allocations = 0;
+    counting = true;
+    for (int i = 0; i < 800; ++i)
+    {
+        PadParams p;
+        p.striker = (StrikerType) ((i / 20) % kNumStrikerTypes);
+        p.rattle = 0.01 * (i % 100);
+        p.airMix = 0.5;
+        v.setParams (p);
+        if (i % 20 == 0) v.trigger (0.9);
+        if (i % 100 == 60) v.setInstrument (ins[(size_t) ((i / 100) % ins.size())].get());
+        v.process (l, r, 128);
+        (void) v.takeRetired();
+    }
+    counting = false;
+    CHECK (allocations.load() == 0);
+#endif
+}

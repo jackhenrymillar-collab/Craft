@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace foundry
 {
@@ -60,6 +61,40 @@ Levels playReference (const CompiledInstrument& ci, double hardness)
     lv.rmsAir = std::sqrt (lv.rmsAir / length);
     return lv;
 }
+// Contact-mic RMS (before output gain) of a 1 N rms band-limited noise force, like a brush.
+double playSweepReference (const CompiledInstrument& ci)
+{
+    ModalBank bank;
+    bank.setInstrument (&ci);
+    bank.reset();
+    std::vector<double> shape ((size_t) ci.n), scratch ((size_t) ci.n);
+    ci.shapeAt (ci.place ({ 0.35, 0.5 }), shape.data(), scratch.data());
+    const double sr = ci.sampleRate;
+    const double aL = 1.0 - std::exp (-2.0 * 3.141592653589793 * std::min (5000.0, 0.45 * sr) / sr);
+    const double aH = 1.0 - std::exp (-2.0 * 3.141592653589793 * 300.0 / sr);
+    const int length = std::max (64, (int) std::lround (0.12 * sr));
+    const int skip = length / 3; // let the response build up
+    uint32_t seed = 0x2545F491u;
+    double lp = 0.0, hp = 0.0, sumF = 0.0, sumV = 0.0;
+    for (int i = 0; i < length; ++i)
+    {
+        seed = seed * 1664525u + 1013904223u;
+        const double noise = (double) (seed >> 8) / 8388608.0 - 1.0;
+        lp += aL * (noise - lp);
+        hp += aH * (lp - hp);
+        const double f = lp - hp;
+        bank.step (shape.data(), f);
+        const double v = bank.velocityAt (ci.micShape.data());
+        if (i >= skip)
+        {
+            sumF += f * f;
+            sumV += v * v;
+        }
+    }
+    if (! (sumF > 0.0))
+        return 0.0;
+    return std::sqrt (sumV / sumF);
+}
 } // namespace
 
 void calibrateOutputLevels (CompiledInstrument& ci)
@@ -82,6 +117,11 @@ void calibrateOutputLevels (CompiledInstrument& ci)
     // The air mic's transient is much peakier than its body (it hears velocity change), and
     // a full ceiling left it 7-14 dB quieter than the contact mic, so it may cut 6 dB at most.
     ci.airGain = gainFor (mid.rmsAir, hard.peakAir, 2.0);
+
+    // A 1 N (rms) sweep sits kSweepLevel below the medium hit's first 40 ms.
+    const double perNewton = playSweepReference (ci);
+    if (perNewton > 1e-18 && std::isfinite (perNewton) && mid.rmsContact > 1e-15)
+        ci.sweepGain = std::clamp (kSweepLevel * mid.rmsContact / perNewton, 1e-4, 1e4);
 }
 
 } // namespace foundry

@@ -4,6 +4,7 @@
 #include "PlateSolver.h"
 #include "ShellSolver.h"
 #include "StripSolver.h"
+#include "LinearAlgebra.h"
 #include "dsp/Calibrate.h"
 
 #include <algorithm>
@@ -140,7 +141,7 @@ void CompiledInstrument::shapeAt (Vec2 p, double* out, double* scratch) const no
         basis->shapes (p, scratch);
         for (int k = 0; k < ne; ++k)
             out[k] = 0.0;
-        for (int i = 0; i < ne; ++i)
+        for (int i = 0; i < nBasis; ++i)
         {
             const double s = scratch[i];
             if (s == 0.0) continue;
@@ -154,7 +155,293 @@ void CompiledInstrument::shapeAt (Vec2 p, double* out, double* scratch) const no
         out[k] = inside ? highStrike[(size_t) k] : 0.0;
 }
 
-std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& specIn, double sampleRate,
+void CompiledInstrument::attachShapeAt (Vec2 p, double* out, double* scratch) const noexcept
+{
+    for (int k = 0; k < n; ++k)
+        out[k] = 0.0;
+    if (attachBasis == nullptr)
+        return;
+    attachBasis->shapes (p, scratch);
+    const int nb = attachBasis->size();
+    for (int i = 0; i < nb; ++i)
+    {
+        const double s = scratch[i];
+        if (s == 0.0) continue;
+        const double* row = attachX.data() + (size_t) i * (size_t) nExact;
+        for (int k = 0; k < nExact; ++k)
+            out[k] += s * row[k];
+    }
+}
+
+namespace
+{
+// One part's modes after treatments, with its pickups, radiation and losses.
+struct PartModes
+{
+    std::shared_ptr<const ModalBasis> basis;
+    std::vector<double> X, Xinv;           // treated = X^T basis (empty = identity)
+    std::vector<double> omega, sigma;      // exact modes
+    std::vector<double> air;               // radiation per unit modal velocity
+    double typical = 0.0;                  // 1 / sqrt(total mass)
+    double lossFactor = 0.0, highFreqDamping = 0.0;
+};
+
+// Treated shapes of the exact modes at p (no high band).
+void treatedShapes (const PartModes& pm, Vec2 p, std::vector<double>& out)
+{
+    const int nb = pm.basis->size();
+    std::vector<double> raw ((size_t) nb);
+    pm.basis->shapes (p, raw.data());
+    out.assign ((size_t) nb, 0.0);
+    if (pm.X.empty())
+    {
+        out = raw;
+        return;
+    }
+    for (int i = 0; i < nb; ++i)
+        for (int k = 0; k < nb; ++k)
+            out[(size_t) k] += raw[(size_t) i] * pm.X[(size_t) (i * nb + k)];
+}
+
+double radiationFloorFor (const ModalBasis& b, double typical, double w) noexcept
+{
+    // Edge/corner radiation for modes with little net volume, growing toward coincidence
+    // (where the structural wavelength reaches the air wavelength). Capped well below 1: a
+    // truncated set of modes radiating at full efficiency makes hard hits unrealistically spiky.
+    const double ks = std::max (1e-6, b.wavenumber (w));
+    const double ratio = std::min (0.35, (w / kSpeedOfSound) / ks);
+    return 0.12 * typical * b.area() * ratio * ratio;
+}
+
+// Radiation per unit modal velocity of each exact mode: monopole (net volume) + dipole
+// (rocking modes, ~ k_air * moment, capped once the part is no longer small against the
+// wavelength) + edge floor.
+std::vector<double> airShapes (const PartModes& pm)
+{
+    const auto& b = *pm.basis;
+    const int nb = b.size();
+    std::vector<double> vol, dx, dy;
+    b.radiation (vol, dx, dy);
+    auto treated = [&] (const std::vector<double>& src) {
+        if (pm.X.empty()) return src;
+        std::vector<double> out ((size_t) nb, 0.0);
+        for (int i = 0; i < nb; ++i)
+            for (int k = 0; k < nb; ++k)
+                out[(size_t) k] += src[(size_t) i] * pm.X[(size_t) (i * nb + k)];
+        return out;
+    };
+    vol = treated (vol);
+    dx = treated (dx);
+    dy = treated (dy);
+    std::vector<double> air ((size_t) nb, 0.0);
+    for (int k = 0; k < nb; ++k)
+    {
+        const double w = pm.omega[(size_t) k];
+        const double dip = std::min ((w / kSpeedOfSound) * std::sqrt (dx[(size_t) k] * dx[(size_t) k] + dy[(size_t) k] * dy[(size_t) k]),
+                                     0.5 * pm.typical * b.area());
+        const double sign = vol[(size_t) k] != 0.0 ? (vol[(size_t) k] > 0 ? 1.0 : -1.0) : hashSign ((std::uint64_t) k, 77);
+        air[(size_t) k] = vol[(size_t) k] + sign * dip + hashSign ((std::uint64_t) k, 991) * radiationFloorFor (b, pm.typical, w);
+    }
+    return air;
+}
+
+// Sound radiation takes energy out of every mode that moves air: sigma_rad =
+// rho w^2 g^2 / (8 pi c) for a source of strength g per unit modal velocity. It is what stops
+// a big thin plate's low modes ringing for minutes. Plus losses into the mount. (The
+// membrane's radiation and air loading are folded into its tuned loss factor, so its M1
+// sound is unchanged.)
+double radiationAndMountLoss (const PartSpec& part, double w, double g) noexcept
+{
+    if (part.type == PartType::Membrane)
+        return 0.0;
+    const double rad = 1.2 * w * w * g * g / (8.0 * kPi * kSpeedOfSound);
+    const double mountLoss = getMaterial (part.material).impossible ? 0.0 : mountDecay (part.type, part.mount, w);
+    return std::min (rad, 0.05 * w) + mountLoss;
+}
+
+PartModes solvePart (const PartSpec& part, const Treatments& treatments, double tuneSemitones, double sampleRate,
+                     int maxModes, TreatedModes* treatedOut)
+{
+    PartModes pm;
+    const Material& mat = getMaterial (part.material);
+    const AgeGlobals age = computeAgeGlobals (mat, treatments.age);
+    pm.basis = makePartBasis (part, tuneSemitones, sampleRate, maxModes, age);
+    const auto& b = *pm.basis;
+
+    // A muffled drum head (pillow, tape): more loss everywhere, most at the top.
+    const double muffle = part.type == PartType::Membrane ? part.control (2) : 0.0;
+    TreatmentContext ctx;
+    ctx.basis = pm.basis.get();
+    ctx.material = &mat;
+    ctx.lossFactor = mat.lossFactor * age.lossScale * (1.0 + 10.0 * muffle);
+    ctx.highFreqDamping = part.highFreqDamping + age.highLossPerKHz + 1.5 * muffle;
+    pm.lossFactor = ctx.lossFactor;
+    pm.highFreqDamping = ctx.highFreqDamping;
+    TreatedModes tm = solveTreatments (ctx, treatments);
+    pm.X = std::move (tm.X);
+    pm.Xinv = std::move (tm.Xinv);
+    pm.omega = std::move (tm.omega);
+    pm.sigma = std::move (tm.sigma);
+    pm.typical = 1.0 / std::sqrt (b.massPerArea() * b.area());
+    pm.air = airShapes (pm);
+    for (int k = 0; k < b.size(); ++k)
+    {
+        const double w = pm.omega[(size_t) k];
+        pm.sigma[(size_t) k] = std::min (0.9 * w, pm.sigma[(size_t) k] + radiationAndMountLoss (part, w, pm.air[(size_t) k]));
+    }
+    if (treatedOut != nullptr)
+    {
+        treatedOut->grit = tm.grit;
+        treatedOut->features = std::move (tm.features);
+    }
+    return pm;
+}
+
+// Where a joined part is held: an end for long parts, near the rim for round ones.
+Vec2 attachAnchor (const ModalBasis& b) noexcept
+{
+    switch (b.type())
+    {
+        case PartType::Bar:
+        case PartType::Tube:
+        case PartType::Spring:   return b.place (0.92, 0.0);
+        case PartType::Membrane: return b.place (0.7, 0.0);
+        case PartType::Plate:
+        case PartType::Box:      return b.place (0.85, 0.785);
+        case PartType::Shell:    return b.place (0.85, 0.0);
+        case PartType::Count:    break;
+    }
+    return b.place (0.8, 0.0);
+}
+
+// Joint spring (N/m) and damper (N s/m).
+void jointConstants (const AttachSpec& a, double& k, double& c, double massA, double massB) noexcept
+{
+    const double u = std::clamp (a.stiffness, 0.0, 1.0);
+    const double mEff = 1.0 / (1.0 / std::max (massA, 1e-4) + 1.0 / std::max (massB, 1e-4));
+    if (a.joint == JointType::Bolt)
+    {
+        k = 2e5 * std::pow (100.0, u);            // 2e5 .. 2e7 N/m
+        c = 0.002 * 2.0 * std::sqrt (k * mEff);   // nearly lossless
+    }
+    else
+    {
+        k = 3e2 * std::pow (300.0, u);            // 300 .. 9e4 N/m
+        c = 0.3 * 2.0 * std::sqrt (k * mEff);     // rubber: heavily damped
+    }
+}
+
+std::uint64_t mix (std::uint64_t z) noexcept
+{
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+// Lay out the rattles and loose objects on the main part.
+std::vector<ContactSite> layoutContacts (const InstrumentSpec& spec, const ModalBasis& b)
+{
+    std::vector<ContactSite> out;
+    auto law = [] (ContactSite& c, double f1mm, double alpha, double lambda) {
+        c.alpha = alpha;
+        c.K = f1mm / std::pow (1e-3, alpha);
+        c.lambda = lambda;
+    };
+    const Vec2 he = b.halfExtents();
+
+    if (spec.rattle.type == RattleType::Snare)
+    {
+        // Ten groups of wires across the middle of the underside, each a light mass on the
+        // wire's tension spring. Rattle 0: pressed 0.25 mm into the part (crisp, short);
+        // Rattle 1: hanging 0.35 mm clear (loose, long buzz).
+        constexpr int wires = 10;
+        for (int j = 0; j < wires; ++j)
+        {
+            const double u = -0.72 + 1.44 * j / (wires - 1);
+            Vec2 p = b.place (std::abs (u), u >= 0.0 ? 0.0 : kPi);
+            p.y += ((j % 2) ? 1.0 : -1.0) * 0.06 * he.y;
+            if (! b.contains (p)) continue;
+            ContactSite c;
+            c.kind = ContactSite::Kind::Wire;
+            c.p = p;
+            c.side = -1.0;
+            c.mass = 6e-4;
+            const double fw = 140.0 + 25.0 * (j % 3);  // slightly different wire tensions
+            c.tetherK = c.mass * std::pow (2.0 * kPi * fw, 2.0);
+            c.tetherDamping = 2.0 * 0.04 * std::sqrt (c.tetherK * c.mass);
+            law (c, 30.0, 1.5, 0.3);
+            c.gapTight = -2.5e-4;
+            c.gapLoose = 3.5e-4;
+            out.push_back (c);
+        }
+    }
+    else if (spec.rattle.type == RattleType::Sizzle)
+    {
+        // Six rivets sitting loosely in holes near the edge.
+        for (int j = 0; j < 6; ++j)
+        {
+            ContactSite c;
+            c.kind = ContactSite::Kind::Rivet;
+            c.p = b.place (0.82, 2.0 * kPi * j / 6.0 + 0.3);
+            if (! b.contains (c.p)) continue;
+            c.side = 1.0;
+            c.mass = 1.5e-3;
+            c.gravity = 9.81;
+            c.tetherK = 25.0;
+            c.tetherDamping = 0.004;
+            law (c, 3000.0, 1.5, 0.05);
+            c.gapTight = 0.0;
+            c.gapLoose = 8e-4;
+            out.push_back (c);
+        }
+    }
+
+    const auto& L = spec.loose;
+    if (L.type != LooseType::None && L.amount > 0.0)
+    {
+        int maxCount = 0;
+        ContactSite proto;
+        proto.kind = ContactSite::Kind::Grain;
+        proto.side = 1.0;
+        proto.gravity = 9.81;
+        switch (L.type)
+        {
+            case LooseType::Rice:  maxCount = 24; proto.mass = 1e-4; law (proto, 150.0, 1.5, 1.5); break;   // clumps of a few grains
+            case LooseType::Beads: maxCount = 12; proto.mass = 5e-4; law (proto, 4000.0, 1.5, 0.05); break;  // glass: lively
+            case LooseType::Sand:  maxCount = 32; proto.mass = 4e-5; law (proto, 15.0, 1.5, 6.0); break;     // soft, dead
+            case LooseType::Chain:
+                maxCount = 10; proto.mass = 2e-3; law (proto, 1500.0, 1.5, 0.2);
+                proto.kind = ContactSite::Kind::Rivet;   // links are held together
+                proto.tetherK = 30.0;
+                proto.tetherDamping = 0.02;
+                break;
+            case LooseType::None:
+            case LooseType::Count: break;
+        }
+        const int count = std::clamp ((int) std::lround (std::clamp (L.amount, 0.0, 1.0) * maxCount), 1, maxCount);
+        std::uint64_t seed = mix ((std::uint64_t) spec.treatments.seed * 7919ull + (std::uint64_t) L.type);
+        auto rnd = [&seed] { seed = mix (seed + 0x9E3779B97F4A7C15ull); return (double) (seed >> 11) * (1.0 / 9007199254740992.0); };
+        for (int j = 0; j < count && (int) out.size() < kMaxContacts; ++j)
+        {
+            ContactSite c = proto;
+            if (L.type == LooseType::Chain)
+            {
+                const double u = -0.7 + 1.4 * j / std::max (1, count - 1);
+                c.p = b.place (std::abs (u), u >= 0.0 ? 0.5 : 0.5 + kPi);
+            }
+            else
+                c.p = b.interiorPoint (rnd(), rnd(), 0.12);
+            if (! b.contains (c.p)) continue;
+            out.push_back (c);
+        }
+    }
+    if ((int) out.size() > kMaxContacts)
+        out.resize ((size_t) kMaxContacts);
+    return out;
+}
+} // namespace
+
+std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& specIn, double hostRate,
                                                        std::uint64_t version)
 {
     const auto t0 = std::chrono::steady_clock::now();
@@ -163,69 +450,46 @@ std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& spe
     ci->spec.treatments.clampToRange();
     ci->spec.part.material = resolveMaterial (ci->spec.part);
     ci->spec.part.mount = std::clamp (ci->spec.part.mount, 0, partInfo (ci->spec.part.type).mountCount - 1);
+    ci->spec.attach.part.material = resolveMaterial (ci->spec.attach.part);
+    ci->spec.attach.part.mount = std::clamp (ci->spec.attach.part.mount, 0, partInfo (ci->spec.attach.part.type).mountCount - 1);
     const auto& spec = ci->spec;
+    ci->oversample = spec.oversample ? 2 : 1;
+    const double sampleRate = hostRate * ci->oversample;
     ci->sampleRate = sampleRate;
     ci->version = version;
 
-    const Material& mat = getMaterial (spec.part.material);
-    const AgeGlobals age = computeAgeGlobals (mat, spec.treatments.age);
+    // ---- Main part ---------------------------------------------------------------------
+    TreatedModes extras;
+    PartModes A = solvePart (spec.part, spec.treatments, spec.tuneSemitones, sampleRate, spec.quality, &extras);
+    const auto& basis = *A.basis;
+    ci->basis = A.basis;
+    ci->nBasis = basis.size();
+    ci->grit = extras.grit;
+    ci->features = std::move (extras.features);
+    const int nA = basis.size();
 
-    auto basis = makePartBasis (spec.part, spec.tuneSemitones, sampleRate, spec.quality, age);
-    ci->basis = basis;
-    const int nExact = basis->size();
-    ci->nExact = nExact;
-
-    // A muffled drum head (pillow, tape): more loss everywhere, most at the top.
-    const double muffle = spec.part.type == PartType::Membrane ? spec.part.control (2) : 0.0;
-
-    TreatmentContext ctx;
-    ctx.basis = basis.get();
-    ctx.material = &mat;
-    ctx.lossFactor = mat.lossFactor * age.lossScale * (1.0 + 10.0 * muffle);
-    ctx.highFreqDamping = spec.part.highFreqDamping + age.highLossPerKHz + 1.5 * muffle;
-    TreatedModes tm = solveTreatments (ctx, spec.treatments);
-
-    ci->X = std::move (tm.X);
-    ci->Xinv = std::move (tm.Xinv);
-    ci->omega = std::move (tm.omega);
-    ci->sigma = std::move (tm.sigma);
-    ci->grit = tm.grit;
-    ci->features = std::move (tm.features);
-    ci->highStrike.assign ((size_t) nExact, 0.0);
-    ci->wavenumber.resize ((size_t) nExact);
-    for (int k = 0; k < nExact; ++k)
-        ci->wavenumber[(size_t) k] = basis->wavenumber (ci->omega[(size_t) k]);
-
-    const double typical = 1.0 / std::sqrt (basis->massPerArea() * basis->area());
-    // Edge/corner radiation floor for modes with little net volume, growing toward
-    // coincidence (where the structural wavelength reaches the air wavelength).
-    auto radiationFloor = [&] (double w) {
-        const double ks = std::max (1e-6, basis->wavenumber (w));
-        // Capped well below 1: a truncated set of modes radiating at full efficiency makes
-        // hard hits unrealistically spiky.
-        const double ratio = std::min (0.35, (w / kSpeedOfSound) / ks);
-        return 0.12 * typical * basis->area() * ratio * ratio;
-    };
-
-    // ---- Statistical high band -------------------------------------------------------
-    std::vector<double> highMic, highAir;
+    // ---- Statistical high band ---------------------------------------------------------
+    std::vector<double> hOmega, hSigma, hStrike, hMic, hAir, hWave;
     {
-        const double wTop = std::min (2.0 * kPi * 18000.0, 0.45 * 2.0 * kPi * sampleRate);
-        const double wLow = basis->omega (nExact - 1) * 1.01;
+        const double wTop = std::min (2.0 * kPi * 18000.0, 0.45 * 2.0 * kPi * hostRate);
+        const double wLow = basis.omega (nA - 1) * 1.01;
         const int bands = std::clamp (spec.highBandModes, 0, kMaxHighModes);
         // Only parts whose modes really are dense up there need it (2-D parts).
-        const double countAbove = basis->modeCountBelow (wTop) - basis->modeCountBelow (wLow);
+        const double countAbove = basis.modeCountBelow (wTop) - basis.modeCountBelow (wLow);
         if (bands > 0 && wTop > wLow * 1.05 && countAbove > 2.0 * bands)
         {
             // How the treatments moved the upper exact modes, extrapolated statistically.
+            // (Uses the material-only decay of the exact modes, before radiation and mounts.)
             double meanShift = 0.0, rmsShift = 0.0, lossRatio = 0.0;
             int count = 0;
-            for (int k = nExact / 2; k < nExact; ++k)
+            for (int k = nA / 2; k < nA; ++k)
             {
-                const double sh = std::log (ci->omega[(size_t) k] / basis->omega (k));
+                const double w = A.omega[(size_t) k];
+                const double sh = std::log (w / basis.omega (k));
                 meanShift += sh;
                 rmsShift += sh * sh;
-                lossRatio += ci->sigma[(size_t) k] / materialDecayRate (ci->omega[(size_t) k], ctx.lossFactor, ctx.highFreqDamping);
+                const double extra = radiationAndMountLoss (spec.part, w, A.air[(size_t) k]);
+                lossRatio += std::max (0.0, A.sigma[(size_t) k] - extra) / materialDecayRate (w, A.lossFactor, A.highFreqDamping);
                 ++count;
             }
             meanShift /= count;
@@ -241,78 +505,136 @@ std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& spe
             {
                 const double lo = wLow * std::pow (wTop / wLow, (double) b / bands);
                 const double hi = wLow * std::pow (wTop / wLow, (double) (b + 1) / bands);
-                const double modesInBand = std::max (1.0, basis->modeCountBelow (hi) - basis->modeCountBelow (lo));
+                const double modesInBand = std::max (1.0, basis.modeCountBelow (hi) - basis.modeCountBelow (lo));
                 const double g1 = rnd(), g2 = rnd(), g3 = rnd(), g4 = rnd();
                 const double gauss = std::sqrt (-2.0 * std::log (std::max (1e-12, g1))) * std::cos (2.0 * kPi * g2);
                 const double w = lo * std::pow (hi / lo, g3) * std::exp (meanShift + rmsShift * gauss);
-                ci->omega.push_back (w);
-                ci->sigma.push_back (std::min (0.9 * w, lossRatio * materialDecayRate (w, ctx.lossFactor, ctx.highFreqDamping)));
-                ci->highStrike.push_back ((g4 < 0.5 ? -1.0 : 1.0) * typical * std::sqrt (modesInBand));
-                highMic.push_back ((rnd() < 0.5 ? -1.0 : 1.0) * typical);
-                highAir.push_back ((rnd() < 0.5 ? -1.0 : 1.0) * radiationFloor (w));
-                ci->wavenumber.push_back (basis->wavenumber (w));
+                hOmega.push_back (w);
+                hSigma.push_back (std::min (0.9 * w, lossRatio * materialDecayRate (w, A.lossFactor, A.highFreqDamping)));
+                hStrike.push_back ((g4 < 0.5 ? -1.0 : 1.0) * A.typical * std::sqrt (modesInBand));
+                hMic.push_back ((rnd() < 0.5 ? -1.0 : 1.0) * A.typical);
+                hAir.push_back ((rnd() < 0.5 ? -1.0 : 1.0) * radiationFloorFor (basis, A.typical, w));
+                hWave.push_back (basis.wavenumber (w));
             }
+            for (size_t b = 0; b < hOmega.size(); ++b)
+                hSigma[b] = std::min (0.9 * hOmega[b], hSigma[b] + radiationAndMountLoss (spec.part, hOmega[b], hAir[b]));
         }
+    }
+
+    // Contact mic on the main part (exact modes).
+    std::vector<double> micA;
+    treatedShapes (A, ci->place (spec.mic.contact), micA);
+
+    // ---- Joined part --------------------------------------------------------------------
+    // The joint is a spring (and damper) between a point on each part: K = diag(w^2) + k g g^T
+    // with g = [phi_A(a); -phi_B(b)], re-solved into the modes of the combined object. Energy
+    // passes between the parts through it: beating, swells and a body under the strike.
+    std::vector<double> omegaC = A.omega, sigmaC = A.sigma, micC = micA, airC = A.air;
+    std::vector<double> XC = A.X;
+    int nC = nA;
+    if (spec.attach.enabled)
+    {
+        PartModes B = solvePart (spec.attach.part, Treatments {}, spec.tuneSemitones, sampleRate, kMaxAttachModes, nullptr);
+        const int nB = std::min (B.basis->size(), kMaxAttachModes);
+        nC = nA + nB;
+        ci->attachBasis = B.basis;
+        ci->jointMain = basis.place (std::clamp (spec.attach.place, 0.0, 0.95), 0.6);
+        ci->jointAttach = attachAnchor (*B.basis);
+
+        std::vector<double> gA, gB;
+        treatedShapes (A, ci->jointMain, gA);
+        treatedShapes (B, ci->jointAttach, gB);
+        double sA = 0.0, sB = 0.0;
+        for (double x : gA) sA += x * x;
+        for (int k = 0; k < nB; ++k) sB += gB[(size_t) k] * gB[(size_t) k];
+        double kJ = 0.0, cJ = 0.0;
+        // Driving-point masses 1 / sum(phi^2) set the joint's damping scale.
+        jointConstants (spec.attach, kJ, cJ, 1.0 / std::max (sA, 1e-12), 1.0 / std::max (sB, 1e-12));
+
+        std::vector<double> g ((size_t) nC);
+        for (int k = 0; k < nA; ++k) g[(size_t) k] = gA[(size_t) k];
+        for (int k = 0; k < nB; ++k) g[(size_t) (nA + k)] = -gB[(size_t) k];
+        std::vector<double> K ((size_t) nC * (size_t) nC, 0.0), w0 ((size_t) nC), s0 ((size_t) nC);
+        for (int k = 0; k < nA; ++k) { w0[(size_t) k] = A.omega[(size_t) k]; s0[(size_t) k] = A.sigma[(size_t) k]; }
+        for (int k = 0; k < nB; ++k) { w0[(size_t) (nA + k)] = B.omega[(size_t) k]; s0[(size_t) (nA + k)] = B.sigma[(size_t) k]; }
+        for (int i = 0; i < nC; ++i)
+        {
+            K[(size_t) (i * nC + i)] = w0[(size_t) i] * w0[(size_t) i];
+            for (int j = 0; j < nC; ++j)
+                K[(size_t) (i * nC + j)] += kJ * g[(size_t) i] * g[(size_t) j];
+        }
+        std::vector<double> lam, V;
+        linalg::symmetricEigen (K, nC, lam, V);
+
+        omegaC.assign ((size_t) nC, 0.0);
+        sigmaC.assign ((size_t) nC, 0.0);
+        micC.assign ((size_t) nC, 0.0);
+        airC.assign ((size_t) nC, 0.0);
+        for (int k = 0; k < nC; ++k)
+        {
+            const double w = std::sqrt (std::max (lam[(size_t) k], 1.0));
+            // Proportional part of the damping keeps each old mode's share; the joint's own
+            // damper acts on the stretch of the joint in this mode.
+            double s = 0.0, stretch = 0.0, mic = 0.0, air = 0.0;
+            for (int i = 0; i < nC; ++i)
+            {
+                const double vik = V[(size_t) (i * nC + k)];
+                s += vik * vik * s0[(size_t) i];
+                stretch += g[(size_t) i] * vik;
+                if (i < nA) mic += micA[(size_t) i] * vik;
+                air += (i < nA ? A.air[(size_t) i] : B.air[(size_t) (i - nA)]) * vik;
+            }
+            s += 0.5 * cJ * stretch * stretch;
+            omegaC[(size_t) k] = w;
+            sigmaC[(size_t) k] = std::min (0.9 * w, s);
+            micC[(size_t) k] = mic;
+            airC[(size_t) k] = air;
+        }
+        // Final shapes: main part = X_A * V_top, joined part = V_bottom.
+        XC.assign ((size_t) nA * (size_t) nC, 0.0);
+        for (int j = 0; j < nA; ++j)
+            for (int i = 0; i < nA; ++i)
+            {
+                const double xji = A.X.empty() ? (i == j ? 1.0 : 0.0) : A.X[(size_t) (j * nA + i)];
+                if (xji == 0.0) continue;
+                for (int k = 0; k < nC; ++k)
+                    XC[(size_t) (j * nC + k)] += xji * V[(size_t) (i * nC + k)];
+            }
+        ci->attachX.assign ((size_t) B.basis->size() * (size_t) nC, 0.0);
+        for (int j = 0; j < nB; ++j)
+            for (int k = 0; k < nC; ++k)
+                ci->attachX[(size_t) (j * nC + k)] = V[(size_t) ((nA + j) * nC + k)];
+    }
+    else
+        ci->Xinv = std::move (A.Xinv);
+
+    // ---- Assemble: exact (combined) modes, then the high band ----------------------------
+    ci->nExact = nC;
+    ci->X = std::move (XC);
+    ci->omega = omegaC;
+    ci->sigma = sigmaC;
+    ci->micShape = micC;
+    ci->airShape = airC;
+    ci->highStrike.assign ((size_t) nC, 0.0);
+    ci->wavenumber.resize ((size_t) nC);
+    for (int k = 0; k < nC; ++k)
+        ci->wavenumber[(size_t) k] = basis.wavenumber (ci->omega[(size_t) k]);
+    for (size_t b = 0; b < hOmega.size(); ++b)
+    {
+        ci->omega.push_back (hOmega[b]);
+        ci->sigma.push_back (hSigma[b]);
+        ci->highStrike.push_back (hStrike[b]);
+        ci->micShape.push_back (hMic[b]);
+        ci->airShape.push_back (hAir[b]);
+        ci->wavenumber.push_back (hWave[b]);
     }
     const int n = (int) ci->omega.size();
     ci->n = n;
     const std::size_t nz = ci->omega.size();
 
-    const double nyquistGuard = 0.47 * 2.0 * kPi * sampleRate;
-
-    // ---- Pickups ---------------------------------------------------------------------
-    ci->micShape.assign (nz, 0.0);
-    std::vector<double> scratch (nz);
-    ci->shapeAt (ci->place (spec.mic.contact), ci->micShape.data(), scratch.data());
-    for (int k = nExact; k < n; ++k)
-        ci->micShape[(size_t) k] = highMic[(size_t) (k - nExact)];
-
-    {
-        std::vector<double> vol, dx, dy;
-        basis->radiation (vol, dx, dy);
-        auto treated = [&] (const std::vector<double>& src) {
-            if (ci->X.empty()) return src;
-            std::vector<double> out ((size_t) nExact, 0.0);
-            for (int i = 0; i < nExact; ++i)
-                for (int k = 0; k < nExact; ++k)
-                    out[(size_t) k] += src[(size_t) i] * ci->X[(size_t) (i * nExact + k)];
-            return out;
-        };
-        vol = treated (vol);
-        dx = treated (dx);
-        dy = treated (dy);
-        ci->airShape.assign (nz, 0.0);
-        for (int k = 0; k < nExact; ++k)
-        {
-            const double w = ci->omega[(size_t) k];
-            // Monopole (net volume) + dipole (rocking modes, ~ k_air * moment) + edge floor.
-            // The compact-dipole term k*D only holds while the part is small against the
-            // wavelength; beyond that radiation saturates, so it is capped at a typical
-            // mode's full-area strength.
-            const double dip = std::min ((w / kSpeedOfSound) * std::sqrt (dx[(size_t) k] * dx[(size_t) k] + dy[(size_t) k] * dy[(size_t) k]),
-                                         0.5 * typical * basis->area());
-            const double sign = vol[(size_t) k] != 0.0 ? (vol[(size_t) k] > 0 ? 1.0 : -1.0) : hashSign ((std::uint64_t) k, 77);
-            ci->airShape[(size_t) k] = vol[(size_t) k] + sign * dip + hashSign ((std::uint64_t) k, 991) * radiationFloor (w);
-        }
-        for (int k = nExact; k < n; ++k)
-            ci->airShape[(size_t) k] = highAir[(size_t) (k - nExact)];
-    }
-
-    // Sound radiation takes energy out of every mode that moves air: sigma_rad =
-    // rho w^2 g^2 / (8 pi c) for a source of strength g per unit modal velocity. It is what
-    // stops a big thin plate's low modes ringing for minutes. (The membrane's radiation and
-    // air loading are folded into its tuned loss factor until drum shells exist, so its M1
-    // sound is unchanged.)
-    if (spec.part.type != PartType::Membrane)
-        for (int k = 0; k < n; ++k)
-        {
-            const double w = ci->omega[(size_t) k], g = ci->airShape[(size_t) k];
-            const double rad = 1.2 * w * w * g * g / (8.0 * kPi * kSpeedOfSound);
-            const double mountLoss = getMaterial (spec.part.material).impossible ? 0.0 : mountDecay (spec.part.type, spec.part.mount, w);
-            ci->sigma[(size_t) k] = std::min (0.9 * w, ci->sigma[(size_t) k] + std::min (rad, 0.05 * w) + mountLoss);
-        }
-
     // ---- Discretisation ---------------------------------------------------------------
+    // Exact discretisation of each damped mode with a zero-order-hold force.
+    const double nyquistGuard = 0.47 * 2.0 * kPi * sampleRate;
     const double T = 1.0 / sampleRate;
     for (auto* v : { &ci->a11, &ci->a12, &ci->a21, &ci->a22, &ci->b1, &ci->b2 })
         v->assign (nz, 0.0);
@@ -343,6 +665,28 @@ std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& spe
     for (int k = 0; k < n; ++k)
         if (ci->omega[(size_t) k] >= nyquistGuard)
             ci->micShape[(size_t) k] = ci->airShape[(size_t) k] = 0.0;
+
+    // ---- Rattles and loose objects ------------------------------------------------------
+    ci->contacts = layoutContacts (spec, basis);
+    ci->contactModes = std::min (nC, kMaxContactModes);
+    if (! ci->contacts.empty())
+    {
+        const int m = ci->contactModes;
+        ci->contactShapes.assign (ci->contacts.size() * (size_t) m, 0.0);
+        std::vector<double> sh (nz), scratch (std::max<std::size_t> (nz, (size_t) kMaxModes));
+        for (size_t j = 0; j < ci->contacts.size(); ++j)
+        {
+            auto& c = ci->contacts[j];
+            ci->shapeAt (c.p, sh.data(), scratch.data());
+            double comp = 0.0;
+            for (int k = 0; k < m; ++k)
+            {
+                ci->contactShapes[j * (size_t) m + (size_t) k] = sh[(size_t) k];
+                comp += sh[(size_t) k] * sh[(size_t) k] * ci->b1[(size_t) k];
+            }
+            c.compliance = comp;
+        }
+    }
 
     calibrateOutputLevels (*ci);
 
