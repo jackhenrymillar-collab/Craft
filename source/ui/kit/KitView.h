@@ -62,6 +62,7 @@ private:
     juce::OwnedArray<MaterialSwatch> swatches;
     juce::TextButton openBench { "Open on bench" };
     juce::OwnedArray<Knob> shapeKnobs;
+    juce::OwnedArray<Knob> shellKnobs; // kick shell: depth and port
 
     // Add-ons column: a joined part, rattles, loose objects.
     juce::ComboBox attachBox, attachMaterialBox;

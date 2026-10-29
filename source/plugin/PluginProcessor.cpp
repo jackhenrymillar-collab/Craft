@@ -18,6 +18,7 @@ FoundryProcessor::FoundryProcessor()
     live.airMix = apvts.getRawParameterValue (params::id::airMix);
     live.micDistance = apvts.getRawParameterValue (params::id::micDistance);
     live.rattle = apvts.getRawParameterValue (params::id::rattle);
+    live.pitchDrop = apvts.getRawParameterValue (params::id::pitchDrop);
 
     for (auto* p : getParameters())
         if (auto* wp = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
@@ -45,7 +46,11 @@ FoundryProcessor::FoundryProcessor()
         s.modes = ci.n;
         s.exactModes = ci.nExact;
         s.solveMs = ci.solveMilliseconds;
-        s.fundamentalHz = ci.n > 0 ? ci.omega[0] / juce::MathConstants<double>::twoPi : 0.0;
+        // The lowest audible mode (a kick's port can sit below 20 Hz).
+        s.fundamentalHz = 0.0;
+        for (int k = 0; k < ci.n && s.fundamentalHz == 0.0; ++k)
+            if (ci.omega[(size_t) k] >= 20.0 * juce::MathConstants<double>::twoPi)
+                s.fundamentalHz = ci.omega[(size_t) k] / juce::MathConstants<double>::twoPi;
         s.version = ci.version;
         s.attached = ci.hasAttachment();
         if (s.attached)
@@ -96,6 +101,8 @@ InstrumentSpec FoundryProcessor::buildSpec() const
     s.part.mount = getMount();
     for (int i = 0; i < 3; ++i)
         s.part.shape[(size_t) i] = get (params::id::shape[i]);
+    s.part.shellDepth = get (params::id::shellDepth);
+    s.part.shellPort = get (params::id::shellPort);
     s.tuneSemitones = get (params::id::tune);
     auto& t = s.treatments;
     t.age.amount = get (params::id::ageAmount);
@@ -167,6 +174,7 @@ PadParams FoundryProcessor::readLiveParams() const noexcept
     p.airMix = live.airMix->load();
     p.micDistance = live.micDistance->load();
     p.rattle = live.rattle->load();
+    p.pitchDrop = live.pitchDrop->load();
     p.striker = (StrikerType) juce::jlimit (0, kNumStrikerTypes - 1, strikerType.load (std::memory_order_relaxed));
     return p;
 }
@@ -316,7 +324,18 @@ MaterialId FoundryProcessor::getMaterial() const
 
 void FoundryProcessor::setMount (int m)
 {
-    apvts.state.setProperty (params::mount, juce::jlimit (0, partInfo (getPartType()).mountCount - 1, m), nullptr);
+    m = juce::jlimit (0, partInfo (getPartType()).mountCount - 1, m);
+    if (getPartType() == PartType::Membrane && m == 1 && getMount() != 1)
+    {
+        // Putting a head on a kick shell: start from a 22" kick, slack, lightly muffled, played
+        // with the kick beater.
+        const float kick[3] = { 0.86f, 0.1f, 0.25f };
+        for (int i = 0; i < 3; ++i)
+            if (auto* p = apvts.getParameter (params::id::shape[i]))
+                p->setValueNotifyingHost (kick[i]);
+        setStriker (StrikerType::Beater);
+    }
+    apvts.state.setProperty (params::mount, m, nullptr);
 }
 
 int FoundryProcessor::getMount() const

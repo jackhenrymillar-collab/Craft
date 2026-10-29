@@ -68,7 +68,7 @@ PartView::Mapping PartView::mapping() const
     m.centre = r.getCentre();
     const double hx = juce::jmax (1e-4, snap.halfExtents.x), hy = juce::jmax (1e-4, snap.round ? snap.halfExtents.x : snap.halfExtents.y);
     // Leave room for hoops, cords and mounts around the part.
-    const float margin = snap.part == PartType::Membrane ? 1.12f : 1.08f;
+    const float margin = snap.part == PartType::Membrane ? (snap.mount == 1 ? 1.2f : 1.12f) : 1.08f;
     const float s = (float) juce::jmin ((double) r.getWidth() / (2.0 * hx * margin), (double) r.getHeight() / (2.0 * hy * margin));
     m.sx = s;
     m.sy = s;
@@ -106,16 +106,30 @@ void PartView::drawUnder (juce::Graphics& g, const Mapping& m, const juce::Path&
     {
         case PartType::Membrane:
         {
-            // Hoop (chrome-ish rim) and lugs.
+            // Kick shell: a deep wooden shell under the hoop, casting a longer shadow.
+            const bool kick = snap.mount == 1;
+            if (kick)
+            {
+                const auto shell = b.expanded (b.getWidth() * 0.075f);
+                g.setColour (juce::Colours::black.withAlpha (0.45f));
+                g.fillEllipse (shell.translated (10.0f, 16.0f));
+                g.setGradientFill (juce::ColourGradient (juce::Colour (0xff9a6436), shell.getX(), shell.getY(),
+                                                         juce::Colour (0xff4a2a16), shell.getRight(), shell.getBottom(), false));
+                g.fillEllipse (shell);
+                g.setColour (juce::Colour (0xffc58a52).withAlpha (0.5f));
+                g.drawEllipse (shell.reduced (2.0f), 1.5f);
+            }
+            // Hoop (chrome-ish rim) and lugs (claw hooks on a kick).
             const auto outer = b.expanded (b.getWidth() * 0.06f);
             g.setColour (juce::Colours::black.withAlpha (0.35f));
             g.fillEllipse (outer.translated (4.0f, 6.0f));
             g.setGradientFill (juce::ColourGradient (juce::Colour (0xff8d8f88), outer.getX(), outer.getY(),
                                                      juce::Colour (0xff3b3c37), outer.getRight(), outer.getBottom(), false));
             g.fillEllipse (outer);
-            for (int i = 0; i < 8; ++i)
+            const int lugs = kick ? 10 : 8;
+            for (int i = 0; i < lugs; ++i)
             {
-                const float a = kTwoPi * (float) i / 8.0f + 0.2f;
+                const float a = kTwoPi * (float) i / (float) lugs + 0.2f;
                 const auto p = c.getPointOnCircumference (outer.getWidth() * 0.5f - 2.0f, a);
                 juce::Path lug;
                 lug.addRoundedRectangle (-6.0f, -11.0f, 12.0f, 22.0f, 3.0f);

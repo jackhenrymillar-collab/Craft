@@ -150,7 +150,7 @@ private:
     {
         std::atomic<float>* force = nullptr, *hardness = nullptr, *spread = nullptr, *position = nullptr,
                           *level = nullptr, *pan = nullptr, *airMix = nullptr, *micDistance = nullptr,
-                          *rattle = nullptr;
+                          *rattle = nullptr, *pitchDrop = nullptr;
     } live;
     std::atomic<int> strikerType { 0 };
     void migrateState();

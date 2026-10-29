@@ -45,6 +45,11 @@ inline constexpr const char* looseAmount = "p1_looseAmount";
 inline constexpr const char* jointStiffness = "p1_jointStiffness";
 inline constexpr const char* attachSize = "p1_attachSize";
 inline constexpr const char* attachPlace = "p1_attachPlace";
+
+// Low end: the kick shell's depth and port reshape the modes; Pitch drop is live.
+inline constexpr const char* shellDepth = "p1_shellDepth";
+inline constexpr const char* shellPort = "p1_shellPort";
+inline constexpr const char* pitchDrop = "p1_pitchDrop";
 } // namespace id
 
 // Parameters whose change needs a recompile (they reshape the modes).
