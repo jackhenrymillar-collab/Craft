@@ -58,6 +58,49 @@ Short log of choices and why. Newest at the bottom.
 - **Output safety:** per-pad non-finite/runaway detection resets the pad and flags it in the
   status chip; the plugin output has a soft clip above −1 dBFS.
 
+## 2026-10-29 · M2: objects, strikers, air mic
+
+- **Seven part types** behind one `ModalBasis` interface (mass-normalised modes, shapes and
+  gradients, quadrature, placement helpers, radiation). Each has three shape controls and one
+  or two mounts (`source/model/PartCatalogue.cpp` holds names, ranges and defaults):
+  - **Membrane** (unchanged from M1; Diameter, Tension, Muffle).
+  - **Bar**: Euler–Bernoulli beam functions, Ritz-solved with a parabolic undercut so the
+    2nd mode moves from 2.76× toward 4× (marimba tuning) as Undercut goes 0 → 1. Torsional
+    modes too. Mounts: on cords at the nodes (0.224 L) or clamped at one end.
+  - **Plate**: thin Kirchhoff plate. Hung = free edges (Warburton's approximation, within
+    ~7 % of published values); Framed = simply supported (exact).
+  - **Shell**: a bowl that morphs into a bell (Profile). Ring-mode ratios for the bowl, the
+    classic hum/prime/tierce/quint/nominal family for the bell; each mode is a cos/sin pair
+    with a slight split. This is a tuned approximation, not a shell solver.
+  - **Tube**: a hollow free–free beam (chime) plus the air column inside it (open or capped,
+    end corrections included), coupled by the Air control.
+  - **Spring**: a dispersive mode series f ∝ k·√(1 + χk²) (Chirp sets χ) with coil friction.
+  - **Box**: a simply-supported face coupled to the Helmholtz mode of the cavity through its
+    port (cajón-like). Port = 0 closes it.
+- **Material choice follows the part:** membranes take Mylar / Hide / Paper; every other part
+  takes the solids (Paper included). Changing the part resets material, mount and shape knobs
+  to that part's defaults.
+- **Damping for solid parts** adds two things the membrane didn't need: sound radiation
+  (σ = ρω²g²/8πc, from each mode's net volume and dipole moment) and a mount loss (cords,
+  clamps, frames, a cushion under a bowl). Without them a hung steel plate rang for minutes.
+  Impossible materials skip the mount loss so Hyperglass still rings for ages.
+- **Strikers:** Mallet (as M1), **Hammer** (heavy, 350 g, rubber → steel face), **Hand**
+  (palm → fingertip: mass and contact area shrink with Hardness) and **Drop** (a 20 g ball
+  under gravity that bounces until it settles; Force/velocity set the drop height). All use the
+  same implicit Hertz/Hunt–Crossley contact. Heavy strikers are slowed (speed ∝ mass^-0.45) so
+  a hammer isn't 20 dB louder than a stick; a heavy hammer on a small bell still rides the
+  hum mode (1.5 ms contact) and sounds dark, which is physically right.
+- **Air mic** (Air mix, Mic distance): the radiated sound from each mode's volume and dipole
+  terms, delayed by d/c, with gentle air loss (low-pass falling with distance) and 1/d level.
+  The membrane's radiation isn't added to its damping (its M1 tuning already includes it).
+- **Level calibration:** every compiled part is played once with a reference mallet hit and its
+  contact and air gains are set so a medium hit has the same loudness on every part, with a
+  ceiling from a hard hit (the air mic may only be pulled down 6 dB by that ceiling, otherwise
+  it came out 7–14 dB quieter than the contact mic). Default membrane level is unchanged from M1.
+- **Treatments on solid parts:** dents stiffen a solid (shallow-shell effect) instead of
+  slackening it; holes and features are placed with each part's own geometry.
+- **Brush and Scrape are deferred to M3** with the other continuous exciters.
+
 ## Open questions (defaults taken, see brief §8)
 
 1. OS/DAW: macOS first (answered). Which DAWs to test first is still open; default: Logic (AU)

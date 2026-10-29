@@ -70,16 +70,18 @@ void calibrateOutputLevels (CompiledInstrument& ci)
     // (a steel ball on a bell) don't come out 20 dB hotter than everything else.
     const Levels mid = playReference (ci, 0.5);
     const Levels hard = playReference (ci, 1.0);
-    auto gainFor = [] (double rms, double peak) {
+    auto gainFor = [] (double rms, double peak, double maxCut) {
         if (! (rms > 1e-15) || ! std::isfinite (rms))
             return 1.0;
         double g = kCalibrationTarget / rms;
         if (peak > 0.0 && std::isfinite (peak))
-            g = std::min (g, kCalibrationPeak / peak);
+            g = std::min (g, std::max (kCalibrationPeak / peak, g / maxCut));
         return std::clamp (g, 1e-6, 1e9);
     };
-    ci.contactGain = gainFor (mid.rmsContact, hard.peakContact);
-    ci.airGain = gainFor (mid.rmsAir, hard.peakAir);
+    ci.contactGain = gainFor (mid.rmsContact, hard.peakContact, 1e9);
+    // The air mic's transient is much peakier than its body (it hears velocity change), and
+    // a full ceiling left it 7-14 dB quieter than the contact mic, so it may cut 6 dB at most.
+    ci.airGain = gainFor (mid.rmsAir, hard.peakAir, 2.0);
 }
 
 } // namespace foundry

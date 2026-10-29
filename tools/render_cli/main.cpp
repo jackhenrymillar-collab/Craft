@@ -8,6 +8,7 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -21,10 +22,17 @@ const char* kHelp = R"(render_cli: render Foundry hits offline and analyse them.
   --sr HZ               sample rate (48000)
   --length SEC          length (3.0)
   --hits LIST           comma list of time:velocity, e.g. 0:1,0.5:0.6 (default 0:0.8)
-  --at R,THETA          strike at a fixed point (0..1 radius, radians) instead of Position/Spread
-  --material NAME       Mylar | Hide | Paper (Mylar)
+  --at R,THETA          strike at a fixed point (0 centre..1 edge, radians) instead of Position/Spread
+  --part NAME           Membrane | Bar | Plate | Shell (Bowl, Bell) | Tube | Spring | Box (Membrane)
+  --material NAME       any material the part allows (default: the part's own)
+  --mount N|NAME        0/1 or the mount's name (On cords, Clamped, Hung, Framed, Resting, ...)
+  --shape-a/-b/-c U     the part's three shape controls, normalised 0..1 (default: the part's)
+  --profile U           shorthand for --shape-b on a Shell (0 bowl .. 1 bell)
+  --striker NAME        Mallet | Hammer | Hand | Drop (Mallet)
   --force, --hardness, --spread, --position     0..1
-  --mass KG             mallet mass (0.012)
+  --mass KG             mallet mass (0.012, Mallet only)
+  --air-mix U           0 contact mic .. 1 air mic (0)
+  --mic-distance M      air mic distance in metres (0.5)
   --tune ST             Size/Tune in semitones (0)
   --quality N           exactly solved modes (96)
   --age A --climate C
@@ -66,7 +74,39 @@ int main (int argc, char** argv)
     const double length = opt ("--length", 3.0);
 
     InstrumentSpec spec;
-    spec.membrane.material = materialFromName (optS ("--material", "Mylar").toStdString(), MaterialId::Mylar);
+    const auto partName = optS ("--part", "Membrane");
+    spec.part = PartSpec::defaultFor (partFromName (partName.toStdString(), PartType::Membrane));
+    const auto& info = partInfo (spec.part.type);
+    if (args.contains ("--material"))
+    {
+        const auto m = materialFromName (optS ("--material", "").toStdString(), info.defaultMaterial);
+        if (! materialAllowed (spec.part.type, m))
+        {
+            std::cerr << "material not allowed on a " << info.name << "\n";
+            return 1;
+        }
+        spec.part.material = m;
+    }
+    if (args.contains ("--mount"))
+    {
+        const auto m = optS ("--mount", "0");
+        spec.part.mount = m.containsOnly ("0123456789") ? m.getIntValue() : -1;
+        for (int i = 0; i < info.mountCount; ++i)
+            if (m.equalsIgnoreCase (juce::String (info.mounts[(size_t) i].data())))
+                spec.part.mount = i;
+        if (spec.part.mount < 0 || spec.part.mount >= info.mountCount)
+        {
+            std::cerr << "unknown mount '" << m << "' for a " << info.name << "\n";
+            return 1;
+        }
+    }
+    const char* shapeOpts[] = { "--shape-a", "--shape-b", "--shape-c" };
+    for (int i = 0; i < 3; ++i)
+        spec.part.shape[(size_t) i] = std::clamp (opt (shapeOpts[i], spec.part.shape[(size_t) i]), 0.0, 1.0);
+    if (partName.equalsIgnoreCase ("Bell") && ! args.contains ("--shape-b"))
+        spec.part.shape[1] = 1.0;
+    if (args.contains ("--profile"))
+        spec.part.shape[1] = std::clamp (opt ("--profile", 0.0), 0.0, 1.0);
     spec.tuneSemitones = opt ("--tune", 0.0);
     spec.quality = (int) opt ("--quality", 96);
     auto& t = spec.treatments;
@@ -92,6 +132,9 @@ int main (int argc, char** argv)
     pp.spread = opt ("--spread", 0.0);
     pp.strikePosition = opt ("--position", 0.3);
     pp.malletMass = opt ("--mass", 0.012);
+    pp.striker = strikerFromName (optS ("--striker", "Mallet").toStdString(), StrikerType::Mallet);
+    pp.airMix = std::clamp (opt ("--air-mix", 0.0), 0.0, 1.0);
+    pp.micDistance = std::clamp (opt ("--mic-distance", 0.5), 0.1, 3.0);
     pp.level = 1.0;
 
     std::vector<Hit> hits;
@@ -134,10 +177,10 @@ int main (int argc, char** argv)
         voice.process (L.data() + pos, R.data() + pos, 1);
         const double e = voice.energy();
         maxEnergy = std::max (maxEnergy, e);
-        if (voice.mallet().isActive())
+        if (voice.striker().isActive())
         {
-            contactSamples = voice.mallet().contactSamples();
-            peakForce = std::max (peakForce, voice.mallet().peakForce());
+            contactSamples = voice.striker().contactSamples();
+            peakForce = std::max (peakForce, voice.striker().peakForce());
         }
         else
         {
@@ -199,10 +242,37 @@ int main (int argc, char** argv)
     const double f0 = predicted.empty() ? 0.0 : predicted.front();
     const double t60Measured = analysis::measureT60 (L, sr, f0, firstHit + 0.05);
     const double t60Predicted = std::log (1000.0) / ci->sigma[0];
+    // The loudest mode (on a tube with air, or a box, the lowest mode is the air and is
+    // not what you hear most).
+    size_t mainK = 0;
+    if (! peaks.empty() && ! predicted.empty())
+    {
+        const auto loudest = *std::max_element (peaks.begin(), peaks.end(), [] (const auto& a, const auto& b) { return a.db < b.db; });
+        double best = 1e9;
+        for (size_t k = 0; k < predicted.size(); ++k)
+            if (const double c = std::abs (std::log2 (loudest.freq / predicted[k])); c < best) { best = c; mainK = k; }
+    }
+    const double mainHz = predicted.empty() ? 0.0 : predicted[mainK];
+    const double mainT60Measured = mainK == 0 ? t60Measured : analysis::measureT60 (L, sr, mainHz, firstHit + 0.05);
+    const double mainT60Predicted = std::log (1000.0) / ci->sigma[mainK];
 
     auto* report = new juce::DynamicObject();
     report->setProperty ("file", out.getFileName());
     report->setProperty ("sampleRate", sr);
+    report->setProperty ("part", juce::String (info.name.data()));
+    report->setProperty ("material", juce::String (getMaterial (spec.part.material).name.data()));
+    report->setProperty ("mount", juce::String (info.mounts[(size_t) spec.part.mount].data()));
+    report->setProperty ("striker", juce::String (strikerInfo (pp.striker).name.data()));
+    {
+        auto* sh = new juce::DynamicObject();
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto& c = info.controls[(size_t) i];
+            sh->setProperty (juce::String (c.name.data()), c.value (spec.part.shape[(size_t) i]) * c.display);
+        }
+        report->setProperty ("shape", juce::var (sh));
+    }
+    report->setProperty ("airMix", pp.airMix);
     report->setProperty ("peakDbfs", juce::Decibels::gainToDecibels ((double) peak, -200.0));
     report->setProperty ("finite", finite);
     report->setProperty ("clipped", peak >= 1.0f);
@@ -216,6 +286,9 @@ int main (int argc, char** argv)
     report->setProperty ("fundamentalHz", f0);
     report->setProperty ("t60FundamentalPredicted", t60Predicted);
     report->setProperty ("t60FundamentalMeasured", t60Measured);
+    report->setProperty ("loudestModeHz", mainHz);
+    report->setProperty ("t60LoudestPredicted", mainT60Predicted);
+    report->setProperty ("t60LoudestMeasured", mainT60Measured);
     juce::Array<juce::var> pk, pr;
     for (const auto& p : peaks)
     {
@@ -248,7 +321,11 @@ int main (int argc, char** argv)
 
     std::cout << out.getFileName() << ": peak " << juce::String (juce::Decibels::gainToDecibels ((double) peak, -200.0), 1)
               << " dBFS, f0 " << juce::String (f0, 1) << " Hz, T60 " << juce::String (t60Measured, 2) << " s (predicted "
-              << juce::String (t60Predicted, 2) << "), contact " << juce::String (1000.0 * contactSamples / sr, 2) << " ms, "
+              << juce::String (t60Predicted, 2) << ")"
+              << (mainK != 0 ? ", loudest " + juce::String (mainHz, 1) + " Hz T60 " + juce::String (mainT60Measured, 2) + " s (predicted "
+                                   + juce::String (mainT60Predicted, 2) + ")"
+                             : juce::String())
+              << ", contact " << juce::String (1000.0 * contactSamples / sr, 2) << " ms, "
               << ci->n << " modes solved in " << juce::String (ci->solveMilliseconds, 1) << " ms"
               << (finite ? "" : "  NON-FINITE!") << (energyGrew ? "  ENERGY GREW!" : "")
               << (peak >= 1.0f ? "  CLIPPED!" : "") << "\n";
