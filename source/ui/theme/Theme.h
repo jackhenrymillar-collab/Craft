@@ -2,6 +2,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "model/Materials.h"
+
 namespace foundry::theme
 {
 // Workbench theme tokens (brief section 4.1). Change these only with the user's OK.
@@ -33,6 +35,9 @@ juce::Font mono (float height, bool medium = false);
 void drawSectionLabel (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area,
                        juce::Colour colour = colour::textMuted, float height = 11.0f,
                        juce::Justification just = juce::Justification::centredLeft);
+
+// Swatch / surface colour of a material (illustration only, not a theme token).
+juce::Colour materialColour (foundry::MaterialId m);
 
 // Cutting mat: 20 px fine and 100 px major grid lines, white at 4% / 10%.
 void drawCuttingMat (juce::Graphics& g, juce::Rectangle<float> area, juce::Point<float> origin = {});

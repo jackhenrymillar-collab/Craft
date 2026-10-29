@@ -33,7 +33,8 @@ public:
                                  juce::Justification::centred);
         g.setFont (theme::mono (11.0f));
         g.setColour (theme::colour::text);
-        g.drawText (param->getCurrentValueAsText(), r.removeFromBottom (14.0f), juce::Justification::centred, false);
+        g.drawText (valueText ? valueText ((float) param->getValue()) : param->getCurrentValueAsText(),
+                    r.removeFromBottom (14.0f), juce::Justification::centred, false);
     }
 
     void resized() override
@@ -43,6 +44,17 @@ public:
         r.removeFromBottom (14);
         slider.setBounds (r);
     }
+
+    // For knobs whose meaning changes (the part's shape controls): new label, tooltip and
+    // a readout computed from the normalised value.
+    void setLabel (const juce::String& label, const juce::String& tooltip = {})
+    {
+        name = label;
+        slider.setTitle (label);
+        slider.setTooltip (tooltip);
+        repaint();
+    }
+    std::function<juce::String (float normalised)> valueText;
 
     juce::Slider slider;
 
