@@ -80,6 +80,15 @@ std::shared_ptr<const ModalBasis> makePartBasis (const PartSpec& part, double tu
             bp.arealDensity = (mat.arealDensity > 0 ? mat.arealDensity : 0.26) * age.massScale;
             bp.maxFrequency = 0.45 * sampleRate;
             bp.maxModes = maxModes;
+            if (part.mount == 1)
+            {
+                // A kick: the head on a closed shell, the air inside coupling it to a front head.
+                DrumShellBasis::Params dp;
+                dp.batter = bp;
+                dp.depth = std::clamp (part.shellDepth, 0.1, 0.8) / ratio;
+                dp.portRadius = std::clamp (part.shellPort, 0.0, 1.0) * 0.45 * bp.radius;
+                return std::make_shared<DrumShellBasis> (dp);
+            }
             return std::make_shared<MembraneBasis> (bp);
         }
         case PartType::Bar:    return makeBarBasis (part, mat, age, ratio, maxModes, maxOmega);
@@ -665,6 +674,20 @@ std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& spe
     for (int k = 0; k < n; ++k)
         if (ci->omega[(size_t) k] >= nyquistGuard)
             ci->micShape[(size_t) k] = ci->airShape[(size_t) k] = 0.0;
+
+    // ---- Tension modulation ---------------------------------------------------------------
+    if (basis.type() == PartType::Membrane && basis.referenceTension() > 0.0)
+    {
+        // Stretch of the head, averaged over its area: (1 / 2A) integral |grad w|^2. For a
+        // mass-normalised membrane mode T0 integral |grad phi_k|^2 = omega_k^2, so the stretch
+        // is sum (omega_k q_k)^2 / (2 A T0), and the extra tension is E h / (2 (1 - nu)) times it.
+        const auto& mat = getMaterial (resolveMaterial (spec.part));
+        const double inPlaneGPa = mat.name == "Hide" ? 1.2 : (mat.name == "Paper" ? 4.0 : 4.5);
+        const double thickness = mat.arealDensity > 0.0 ? mat.arealDensity / mat.density : 0.0002;
+        const double Eh = inPlaneGPa * 1e9 * thickness;
+        const double T0 = basis.referenceTension();
+        ci->pitchCoupling = Eh / (2.0 * (1.0 - 0.35)) / (T0 * 2.0 * basis.area() * T0);
+    }
 
     // ---- Rattles and loose objects ------------------------------------------------------
     ci->contacts = layoutContacts (spec, basis);

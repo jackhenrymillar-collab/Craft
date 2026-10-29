@@ -100,6 +100,8 @@ void PadVoice::setInstrument (const CompiledInstrument* ci) noexcept
     if (ci == nullptr || ci == active.instrument())
         return;
 
+    glideActive = false; // recomputed for the new modes on the next sample
+    glideCountdown = 0;
     const CompiledInstrument* old = active.instrument();
     const bool sameRate = old != nullptr && std::max (1, old->oversample) == std::max (1, ci->oversample);
     if (old == nullptr || ! sameRate)
@@ -529,6 +531,75 @@ void PadVoice::updateAirMic (double smooth) noexcept
     airLevel += (targetLevel - airLevel) * smooth;
 }
 
+void PadVoice::updateGlide() noexcept
+{
+    glideCountdown = kGlideBlock;
+    const auto* ci = active.instrument();
+    const int ne = ci->nExact, n = ci->n;
+    const double* w = ci->omega.data();
+    // The stretch follows the head's swing squared. Averaged over a cycle (Berger's
+    // approximation) that is half of omega^2 q^2 + v^2 per mode, which glides smoothly instead
+    // of fluttering at twice each mode's frequency.
+    double stretch = 0.0;
+    for (int k = 0; k < ne; ++k)
+    {
+        const double u = w[k] * active.q[(size_t) k], vk = active.v[(size_t) k];
+        stretch += 0.5 * (u * u + vk * vk);
+    }
+    // Pitch drop 0.25 is the head's own physics; up to 1 it exaggerates the stretch a
+    // hundredfold, and towards 0 it fades it out (0 is off).
+    const double gain = std::pow (10.0, (params.pitchDrop - 0.25) * 8.0 / 3.0);
+    // At most an octave, approached softly.
+    const double raw = std::sqrt (1.0 + gain * ci->pitchCoupling * stretch) - 1.0;
+    const double ratio = 1.0 + raw / std::sqrt (1.0 + raw * raw);
+    glideRatio = ratio;
+    glideActive = ratio - 1.0 > 2e-5; // below a twentieth of a cent it's inaudible
+    if (! glideActive)
+        return;
+    // Rotate each mode's (omega q, v) by the extra phase it would gain at the raised tension.
+    // Never past fs/2.
+    const double maxPhase = 0.47 * 2.0 * kPi;
+    for (int k = 0; k < n; ++k)
+    {
+        const double wdt = w[k] * dt;
+        const double d = std::clamp ((ratio - 1.0) * wdt, 0.0, std::max (0.0, maxPhase - wdt));
+        double c, sn;
+        if (d < 0.1)
+        {
+            // Small angles (most of them): Taylor series, cheaper than cos/sin, renormalised
+            // so c^2 + s^2 = 1 and the rotation never adds energy.
+            const double d2 = d * d;
+            c = 1.0 - d2 * (0.5 - d2 * (1.0 / 24.0));
+            sn = d * (1.0 - d2 * (1.0 / 6.0 - d2 * (1.0 / 120.0)));
+            const double norm = 1.5 - 0.5 * (c * c + sn * sn);
+            c *= norm;
+            sn *= norm;
+        }
+        else
+        {
+            c = std::cos (d);
+            sn = std::sin (d);
+        }
+        glideCos[(size_t) k] = c;
+        glideSinOverW[(size_t) k] = sn / w[k];
+        glideSinW[(size_t) k] = sn * w[k];
+    }
+}
+
+void PadVoice::applyGlide() noexcept
+{
+    const int n = active.instrument()->n;
+    double* q = active.q.data();
+    double* v = active.v.data();
+    const double *c = glideCos.data(), *so = glideSinOverW.data(), *sw = glideSinW.data();
+    for (int k = 0; k < n; ++k)
+    {
+        const double qk = q[k], vk = v[k];
+        q[k] = qk * c[k] + vk * so[k];
+        v[k] = vk * c[k] - qk * sw[k];
+    }
+}
+
 double PadVoice::renderSample() noexcept
 {
     const auto* ci = active.instrument();
@@ -560,6 +631,16 @@ double PadVoice::renderSample() noexcept
     }
     else
         active.stepFree();
+
+    // Glide only while the head rings freely: the striker's contact solve assumes the linear
+    // head, and the knob shouldn't change how much energy a hit puts in.
+    if (ci->pitchCoupling > 0.0 && params.pitchDrop > 0.0 && ! hitter.isActive() && ! sweep.active)
+    {
+        if (--glideCountdown <= 0)
+            updateGlide();
+        if (glideActive)
+            applyGlide();
+    }
 
     double contact = ci->contactGain * active.velocityAt (ci->micShape.data());
     const double flow = active.velocityAt (ci->airShape.data());
