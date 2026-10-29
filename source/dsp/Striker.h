@@ -44,6 +44,11 @@ public:
     };
 
     static Model modelFor (const StrikerParams& p) noexcept;
+    // Implicit contact force: the F >= 0 with F = K d^alpha (1 + lambda (d - deltaPrev) / dt),
+    // d = delta0 - c F, where delta0 is the compression if no force acted this step, c the
+    // total compliance of both bodies per newton and deltaPrev last step's compression.
+    static double solveContact (double delta0, double c, double K, double alpha, double lambda, double deltaPrev,
+                                double dt) noexcept;
     // The M1 mallet law and tip size (kept for tests and the Mallet model).
     static Law lawFor (double hardness) noexcept;
     static double tipRadiusFor (double hardness) noexcept;
@@ -66,9 +71,9 @@ public:
 private:
     std::array<double, kMaxModes> strikeShape {};
     Model model;
-    double z = 0.0, vel = 0.0, deltaPrev = 0.0, deltaRate = 0.0, G = 0.0, maxForce = 0.0, prevForce = 0.0;
+    double z = 0.0, vel = 0.0, deltaPrev = 0.0, G = 0.0, maxForce = 0.0, prevForce = 0.0;
     double windowPeak = 0.0;
-    int age = 0, inContactSamples = 0, bounces = 0, restingSamples = 0, windowSamples = 0;
+    int age = 0, inContactSamples = 0, bounces = 0, restingSamples = 0, windowSamples = 0, separatedSamples = 0;
     bool active = false, touched = false, settled = false, calm = false;
 };
 

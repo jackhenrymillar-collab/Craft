@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <optional>
 
 namespace foundry
 {
@@ -28,6 +29,20 @@ struct InstrumentSnapshot
     double solveMs = 0.0;
     double fundamentalHz = 0.0;
     std::uint64_t version = 0;
+
+    // Add-ons.
+    bool attached = false;
+    PartType attachPart = PartType::Box;
+    Vec2 attachHalfExtents;
+    bool attachRound = false;
+    MaterialId attachMaterial = MaterialId::Oak;
+    JointType joint = JointType::Bolt;
+    Vec2 jointMain;
+    RattleType rattle = RattleType::None;
+    LooseType loose = LooseType::None;
+    struct Contact { Vec2 p; ContactSite::Kind kind; bool underneath; };
+    std::vector<Contact> contacts;
+    bool oversampled = false;
 };
 
 class FoundryProcessor final : public juce::AudioProcessor,
@@ -81,6 +96,21 @@ public:
     void setStriker (StrikerType t);
     StrikerType getStriker() const;
 
+    // Add-ons: a second part joined to the main one, rattles, loose objects, oversampling.
+    // Choosing a joined part resets its material and size to that part's defaults.
+    void setAttachPart (std::optional<PartType> t);
+    std::optional<PartType> getAttachPart() const;
+    void setAttachMaterial (MaterialId m);
+    MaterialId getAttachMaterial() const;
+    void setJoint (JointType t);
+    JointType getJoint() const;
+    void setRattleType (RattleType t);
+    RattleType getRattleType() const;
+    void setLooseType (LooseType t);
+    LooseType getLooseType() const;
+    void setOversample (bool on);
+    bool getOversample() const;
+
     InstrumentSnapshot getSnapshot() const;
     std::uint64_t snapshotVersion() const noexcept { return snapshotCounter.load(); }
     float takePeak() noexcept { return peakLevel.exchange (0.0f); }
@@ -119,7 +149,8 @@ private:
     struct LiveParams
     {
         std::atomic<float>* force = nullptr, *hardness = nullptr, *spread = nullptr, *position = nullptr,
-                          *level = nullptr, *pan = nullptr, *airMix = nullptr, *micDistance = nullptr;
+                          *level = nullptr, *pan = nullptr, *airMix = nullptr, *micDistance = nullptr,
+                          *rattle = nullptr;
     } live;
     std::atomic<int> strikerType { 0 };
     void migrateState();

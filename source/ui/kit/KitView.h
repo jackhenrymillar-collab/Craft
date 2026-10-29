@@ -63,9 +63,22 @@ private:
     juce::TextButton openBench { "Open on bench" };
     juce::OwnedArray<Knob> shapeKnobs;
 
+    // Add-ons column: a joined part, rattles, loose objects.
+    juce::ComboBox attachBox, attachMaterialBox;
+    juce::OwnedArray<juce::TextButton> jointChips, rattleChips, looseChips;
+    juce::TextButton oversampleButton { "2x" };
+    juce::OwnedArray<Knob> joinKnobs, rattleKnobs;
+
     // What the recipe panel last showed, so state changes from anywhere (undo, presets,
     // the host) are picked up by the timer.
-    struct Shown { PartType part; MaterialId material; StrikerType striker; int mount; };
+    struct Shown
+    {
+        PartType part; MaterialId material; StrikerType striker; int mount;
+        std::optional<PartType> attach; MaterialId attachMaterial; JointType joint;
+        RattleType rattle; LooseType loose; bool oversample;
+        bool operator== (const Shown&) const = default;
+    };
+    Shown current() const;
     std::optional<Shown> shown;
 
     struct Group
@@ -76,7 +89,8 @@ private:
     };
     std::array<Group, 4> treatments;
     juce::OwnedArray<Knob> macros;
-    juce::Rectangle<int> padArea, recipeArea, treatArea, macroArea;
+    juce::Rectangle<int> padArea, addOnArea, recipeArea, treatArea, macroArea;
+    juce::Rectangle<int> joinTitle, rattleTitle, looseTitle;
     juce::Rectangle<int> objectRow, materialRow, strikerRow, mountRow;
 };
 } // namespace foundry

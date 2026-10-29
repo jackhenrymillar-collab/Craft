@@ -25,6 +25,39 @@ double Striker::tipRadiusFor (double hardness) noexcept
     return 0.02 * std::pow (0.15, h); // 20 mm felt .. 3 mm tip
 }
 
+double Striker::solveContact (double delta0, double c, double K, double alpha, double lambda, double deltaPrev,
+                              double dt) noexcept
+{
+    if (! (delta0 > 0.0) || ! (K > 0.0) || ! (c > 0.0))
+        return 0.0;
+    // Solve g(F) = F - K d^alpha D(d) = 0 on [0, delta0 / c], with d = delta0 - c F the
+    // compression at the end of the step and D(d) = 1 + lambda (d - deltaPrev) / dt the
+    // Hunt-Crossley damping, both taken implicitly. g is increasing in F (d falls, and
+    // D rises with d), so bisection keeps Newton honest. An explicit damping term (using the
+    // last step's rate) can pump energy into a contact/no-contact chatter.
+    auto damp = [&] (double d) { return std::clamp (1.0 + lambda * (d - deltaPrev) / dt, 0.0, 6.0); };
+    double lo = 0.0, hi = delta0 / c;
+    double F = std::min (hi, K * std::pow (delta0, alpha) * damp (delta0));
+    for (int it = 0; it < 40; ++it)
+    {
+        const double d = std::max (0.0, delta0 - c * F);
+        const double Dd = damp (d);
+        const double p = K * std::pow (d, alpha) * Dd;
+        const double g = F - p;
+        if (g > 0.0) hi = F; else lo = F;
+        const bool dampActive = Dd > 0.0 && Dd < 6.0;
+        const double dg = 1.0 + c * (K * alpha * std::pow (d, alpha - 1.0) * Dd
+                                     + (dampActive ? K * std::pow (d, alpha) * lambda / dt : 0.0));
+        double Fn = F - g / dg;
+        if (! (Fn > lo && Fn < hi))
+            Fn = 0.5 * (lo + hi);
+        if (std::abs (Fn - F) <= 1e-12 * (1.0 + F))
+            return Fn;
+        F = Fn;
+    }
+    return F;
+}
+
 Striker::Model Striker::modelFor (const StrikerParams& p) noexcept
 {
     const double h = std::clamp (p.hardness, 0.0, 1.0);
@@ -63,6 +96,18 @@ Striker::Model Striker::modelFor (const StrikerParams& p) noexcept
             m.maxTime = 6.0;
             m.bounces = true;
             break;
+        case StrikerType::Brush:
+            // The touch-down of a brush: many fine bristles, a soft, spread-out landing.
+            m.law = power (1.8, 4.0 * std::pow (15.0, h), 1.2 - 0.6 * h);
+            m.mass = 0.006;
+            m.tipRadius = 0.03 - 0.015 * h;
+            break;
+        case StrikerType::Scrape:
+            // The tip of the stick or rod settling onto the surface before it's dragged.
+            m.law = power (1.5, 150.0 * std::pow (20.0, h), 0.5 - 0.4 * h);
+            m.mass = 0.008;
+            m.tipRadius = 0.004;
+            break;
         case StrikerType::Count: break;
     }
     // Heavy strikers swing slower for the same Force: momentum grows only as mass^0.55, so a
@@ -83,7 +128,6 @@ void Striker::start (const ModalBank& bank, const double* shapeIn, double v0, co
     z = bank.displacementAt (strikeShape.data());
     vel = std::max (0.0, v0);
     deltaPrev = 0.0;
-    deltaRate = 0.0;
     G = bank.compliance (strikeShape.data());
     maxForce = 0.0;
     prevForce = 0.0;
@@ -91,6 +135,7 @@ void Striker::start (const ModalBank& bank, const double* shapeIn, double v0, co
     inContactSamples = 0;
     bounces = 0;
     restingSamples = 0;
+    separatedSamples = 0;
     active = true;
     touched = false;
     settled = false;
@@ -109,40 +154,12 @@ double Striker::process (const ModalBank& bank, double dt) noexcept
     const double zFree = z + dt * vel + 0.5 * model.gravity * dt * dt;
     const double delta0 = zFree - wFree;
     const double c = dt * dt / (2.0 * mass) + G;
-    const double damping = std::clamp (1.0 + model.law.lambda * deltaRate, 0.0, 4.0);
-    const double Kh = model.law.K * damping;
-    const double alpha = model.law.alpha;
-
-    double F = 0.0;
-    if (delta0 > 0.0 && Kh > 0.0)
-    {
-        // Solve g(F) = F - Kh * (delta0 - c F)^alpha = 0 on [0, delta0 / c]; g is increasing.
-        double lo = 0.0, hi = delta0 / c;
-        F = std::min (hi, Kh * std::pow (delta0, alpha));
-        for (int it = 0; it < 30; ++it)
-        {
-            const double d = std::max (0.0, delta0 - c * F);
-            const double p = Kh * std::pow (d, alpha);
-            const double g = F - p;
-            if (g > 0.0) hi = F; else lo = F;
-            const double dg = 1.0 + Kh * alpha * std::pow (d, alpha - 1.0) * c;
-            double Fn = F - g / dg;
-            if (! (Fn > lo && Fn < hi))
-                Fn = 0.5 * (lo + hi);
-            if (std::abs (Fn - F) <= 1e-12 * (1.0 + F))
-            {
-                F = Fn;
-                break;
-            }
-            F = Fn;
-        }
-    }
+    const double F = solveContact (delta0, c, model.law.K, model.law.alpha, model.law.lambda, deltaPrev, dt);
 
     z = zFree - dt * dt / (2.0 * mass) * F;
     vel += dt * (model.gravity - F / mass);
     const double wNew = wFree + G * F;
     const double delta = z - wNew;
-    deltaRate = (delta - deltaPrev) / dt;
     deltaPrev = delta;
     maxForce = std::max (maxForce, F);
     const double surfaceVel = bank.velocityAt (strikeShape.data());
@@ -181,9 +198,18 @@ double Striker::process (const ModalBank& bank, double dt) noexcept
         if ((settled && F == 0.0) || (calm && t > 0.1) || restingSamples * dt > 0.25 || t > model.maxTime)
             active = false;
     }
-    else if ((touched && F == 0.0 && delta < -2e-4 && vel < surfaceVel) || t > model.maxTime)
-        // Lifted clear after the bounce off the surface (or held too long).
-        active = false;
+    else
+    {
+        // Lifted clear after the bounce off the surface (or held too long). The separation
+        // has to last 0.3 ms: near-Nyquist ringing of the top modes can open a momentary gap
+        // that isn't a real lift-off (and would make the contact time depend on the rate).
+        if (touched && F == 0.0 && delta < -2e-4 && vel < surfaceVel)
+            ++separatedSamples;
+        else
+            separatedSamples = 0;
+        if (separatedSamples * dt >= 3e-4 || t > model.maxTime)
+            active = false;
+    }
     return F;
 }
 

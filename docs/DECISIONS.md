@@ -101,6 +101,57 @@ Short log of choices and why. Newest at the bottom.
   slackening it; holes and features are placed with each part's own geometry.
 - **Brush and Scrape are deferred to M3** with the other continuous exciters.
 
+## M3 · Joints, rattles, loose objects, brush and scrape (2026-10-29)
+
+Jack chose "Rattles + joining" as the way to get more complex sounds.
+
+- **Joining (Kit view: Add-ons → Joined to):** a second part, bolted (stiff, 2·10⁵–2·10⁷ N/m,
+  light damping) or rubber-mounted (300–9·10⁴ N/m, heavily damped), at a point on the main
+  part (Place) and an anchor on the second. Solved in the compile step as one coupled
+  eigenproblem: K = diag(ω²) + k g gᵀ with g the two parts' (treated) mode shapes at the joint;
+  damping per new mode from the old ones plus the joint's own. The second part gets up to 48
+  modes. Treatments act on the main part only. A rubber joint at its softest leaves both parts'
+  fundamentals within 3 %; a bolt pulls the spectrum around (tested).
+- **Rattles and loose objects:** every one is a small point mass with a one-sided
+  Hunt–Crossley contact against the part, optionally on a spring (a snare wire's tension, a
+  rivet's give, a chain link's neighbours) and under gravity. Snare = 10 wire groups underneath
+  (Rattle sets the gap from pressed 0.25 mm in to hanging 0.35 mm clear); Sizzle = 6 rivets near
+  the edge; Rice / Beads / Sand / Chain = up to 16 / 12 / 20 / 10 elements on top, Amount sets
+  how many, placed from the treatment seed. Forces are measured from the resting load, so a pad
+  doesn't thump when it wakes.
+- **Contact solver:** each contact is solved implicitly (Newton + bisection) against its own
+  mass plus the surface compliance, **in turn**, each one seeing the forces of those before it
+  this step (Gauss–Seidel). Solving them all against one shared prediction let ten tight snare
+  wires feed each other into a steady 775 Hz buzz. Contacts push on every mode up to a quarter
+  of the sample rate (12 kHz at 48 kHz): only the lowest 64 left the snare 76 dB down above
+  2 kHz, and forces that change every sample can feed modes in the top octave. The statistical
+  high band gets a random sign per contact so many contacts add up incoherently.
+- **Hunt–Crossley damping is now implicit** (inside the contact solve, for the strikers too).
+  The explicit form, using last step's rate, pumped energy into a contact/no-contact chatter at
+  low sample rates: renders differed by 10 dB between 48 and 192 kHz. They now agree within
+  about 0.1 dB.
+- **Level calibration retuned:** the membrane's reference hit had been chattering (above), which
+  held the default drum 11 dB down. With that fixed the calibration target was lowered 4 dB
+  (0.0478 → 0.03) for kit headroom: the default drum is about 5 dB louder than in M2, other
+  parts 2–4 dB quieter.
+- **Brush and Scrape:** a light touch-down (the striker at 12 % speed), then a pressure that
+  travels 0.3–0.45 s along a short stroke: band-limited noise for the brush (brighter for wire),
+  ridge pulses at the drag speed plus grit for the scrape. The force is calibrated per
+  instrument (a 1 N stroke sits a fixed amount under the reference hit), because a fixed force
+  threw a light drum head around (+4 dBFS) and barely moved a bar (−33 dBFS). Strokes now sit
+  10–15 dB under a hit on every part.
+- **2x oversampling (Add-ons → 2x):** the pad's modes are compiled at twice the host rate and
+  decimated with a 4th-order Butterworth at 0.45 × host rate. An oversampled 48 kHz render
+  matches a native 96 kHz one. Switching it resets the pad (no crossfade between rates).
+- **CPU (this sandbox, 2.1 GHz Xeon, one pad hit 4× a second, 48 kHz):** plain drum 3 %,
+  + box joined 4 %, + snare 13 %, snare at 2x 26 %, + 16 rice 19 %, plate + sizzle 12 %. Each
+  contact costs about 1 % (two passes over ~190 modes per sample). Idle pads sleep, so a kit
+  costs much less than the sum, but the brief's 8-pad target needs the M6 SIMD pass.
+- **Plugin:** new parameters Rattle (live), Loose Amount, Joint Stiffness, Joined Part Size and
+  Joint Place (the last four recompile); structural choices (joined part and material, joint
+  type, rattle type, loose type, oversampling) are state properties, not automatable. Sessions
+  from M1/M2 load with no add-ons.
+
 ## Open questions (defaults taken, see brief §8)
 
 1. OS/DAW: macOS first (answered). Which DAWs to test first is still open; default: Logic (AU)

@@ -8,6 +8,7 @@ add_executable(foundry_tests
     test_realtime.cpp
     test_parts.cpp
     test_strikers.cpp
+    test_couplings.cpp
     test_helpers.h)
 target_link_libraries(foundry_tests PRIVATE foundry_core Catch2::Catch2WithMain)
 foundry_set_warnings(foundry_tests)

@@ -44,6 +44,27 @@ constexpr std::array<StrikerInfo, kNumStrikerTypes> kStrikers {{
     { "Hammer", "Rubber face", "Steel face" },
     { "Hand", "Palm", "Fingertip" },
     { "Drop", "Rubber ball", "Steel ball" },
+    { "Brush", "Soft brush", "Stiff wire brush" },
+    { "Scrape", "Smooth stick", "Ridged rod" },
+}};
+
+constexpr std::array<NamedInfo, kNumJointTypes> kJoints {{
+    { "Bolt", "Bolted: the parts move together at the joint" },
+    { "Rubber", "Rubber mount: soft and lossy" },
+}};
+
+constexpr std::array<NamedInfo, kNumRattleTypes> kRattles {{
+    { "None", "Nothing rattles" },
+    { "Snare", "Snare wires pressed against the underside" },
+    { "Sizzle", "Loose rivets near the edge" },
+}};
+
+constexpr std::array<NamedInfo, kNumLooseTypes> kLoose {{
+    { "None", "Nothing on top" },
+    { "Rice", "A handful of rice" },
+    { "Beads", "Glass beads" },
+    { "Sand", "A sprinkle of sand" },
+    { "Chain", "A light chain lying across it" },
 }};
 
 bool equalsIgnoreCase (std::string_view a, std::string_view b)
@@ -66,6 +87,37 @@ const StrikerInfo& strikerInfo (StrikerType t) noexcept
     const int i = std::clamp ((int) t, 0, kNumStrikerTypes - 1);
     return kStrikers[(size_t) i];
 }
+
+const NamedInfo& jointInfo (JointType t) noexcept
+{
+    return kJoints[(size_t) std::clamp ((int) t, 0, kNumJointTypes - 1)];
+}
+
+const NamedInfo& rattleInfo (RattleType t) noexcept
+{
+    return kRattles[(size_t) std::clamp ((int) t, 0, kNumRattleTypes - 1)];
+}
+
+const NamedInfo& looseInfo (LooseType t) noexcept
+{
+    return kLoose[(size_t) std::clamp ((int) t, 0, kNumLooseTypes - 1)];
+}
+
+namespace
+{
+template <typename E, std::size_t N>
+E fromName (const std::array<NamedInfo, N>& table, std::string_view name, E fallback) noexcept
+{
+    for (std::size_t i = 0; i < N; ++i)
+        if (equalsIgnoreCase (table[i].name, name))
+            return (E) i;
+    return fallback;
+}
+} // namespace
+
+JointType jointFromName (std::string_view name, JointType fallback) noexcept { return fromName (kJoints, name, fallback); }
+RattleType rattleFromName (std::string_view name, RattleType fallback) noexcept { return fromName (kRattles, name, fallback); }
+LooseType looseFromName (std::string_view name, LooseType fallback) noexcept { return fromName (kLoose, name, fallback); }
 
 PartType partFromName (std::string_view name, PartType fallback) noexcept
 {

@@ -19,7 +19,8 @@ std::unique_ptr<juce::AudioParameterFloat> percent (const char* pid, const juce:
 bool affectsModes (const juce::String& p)
 {
     return p == id::tune || p.startsWith ("p1_shape") || p.startsWith ("p1_age") || p.startsWith ("p1_deform") || p.startsWith ("p1_twist")
-        || p.startsWith ("p1_puncture");
+        || p.startsWith ("p1_puncture") || p == id::looseAmount || p == id::jointStiffness || p == id::attachSize
+        || p == id::attachPlace;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
@@ -99,7 +100,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     treat->addChild (percent (id::punctureScatter, "Puncture Scatter", 0.5f));
     treat->addChild (percent (id::punctureRagged, "Puncture Ragged", 0.3f));
 
-    layout.add (std::move (pad), std::move (shape), std::move (treat));
+    auto addOns = std::make_unique<juce::AudioProcessorParameterGroup> ("addons1", "Pad 1 Add-ons", " | ");
+    addOns->addChild (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::rattle, 1 }, "Rattle", juce::NormalisableRange<float> (0.0f, 1.0f), 0.5f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) {
+            if (v < 0.15f) return juce::String ("Tight");
+            if (v > 0.85f) return juce::String ("Loose");
+            return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+        })));
+    addOns->addChild (percent (id::looseAmount, "Loose Amount", 0.5f));
+    addOns->addChild (percent (id::jointStiffness, "Joint Stiffness", 0.5f));
+    addOns->addChild (percent (id::attachSize, "Joined Part Size", (float) partInfo (PartType::Box).controls[0].defaultNormalised()));
+    addOns->addChild (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::attachPlace, 1 }, "Joint Place", juce::NormalisableRange<float> (0.0f, 1.0f), 0.6f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) {
+            if (v < 0.1f) return juce::String ("Centre");
+            if (v > 0.9f) return juce::String ("Edge");
+            return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+        })));
+
+    layout.add (std::move (pad), std::move (shape), std::move (treat), std::move (addOns));
     return layout;
 }
 

@@ -184,6 +184,65 @@ KitView::KitView (FoundryProcessor& p) : proc (p), part (p)
         };
         addAndMakeVisible (k);
     }
+    // Add-ons.
+    attachBox.addItem ("Nothing joined", 1);
+    for (int t = 0; t < kNumPartTypes; ++t)
+        attachBox.addItem (str (partInfo ((PartType) t).name), t + 2);
+    attachBox.setTooltip ("A second part bolted or rubber-mounted to this one (a head on a box, a bar on a plate)");
+    attachBox.setTitle ("Joined part");
+    attachBox.onChange = [this] {
+        const int id = attachBox.getSelectedId();
+        proc.setAttachPart (id <= 1 ? std::nullopt : std::optional<PartType> ((PartType) (id - 2)));
+        refreshRecipe();
+    };
+    addAndMakeVisible (attachBox);
+    attachMaterialBox.setTooltip ("The joined part's material");
+    attachMaterialBox.setTitle ("Joined part material");
+    attachMaterialBox.onChange = [this] {
+        if (const int id = attachMaterialBox.getSelectedId(); id > 0)
+            proc.setAttachMaterial ((MaterialId) (id - 1));
+        refreshRecipe();
+    };
+    addAndMakeVisible (attachMaterialBox);
+    for (int t = 0; t < kNumJointTypes; ++t)
+    {
+        auto* b = jointChips.add (new juce::TextButton (str (jointInfo ((JointType) t).name)));
+        b->setTooltip (str (jointInfo ((JointType) t).description));
+        b->onClick = [this, t] { proc.setJoint ((JointType) t); refreshRecipe(); };
+        addAndMakeVisible (b);
+    }
+    for (int t = 0; t < kNumRattleTypes; ++t)
+    {
+        auto* b = rattleChips.add (new juce::TextButton (str (rattleInfo ((RattleType) t).name)));
+        b->setTooltip (str (rattleInfo ((RattleType) t).description));
+        b->onClick = [this, t] { proc.setRattleType ((RattleType) t); refreshRecipe(); };
+        addAndMakeVisible (b);
+    }
+    for (int t = 0; t < kNumLooseTypes; ++t)
+    {
+        auto* b = looseChips.add (new juce::TextButton (str (looseInfo ((LooseType) t).name)));
+        b->setTooltip (str (looseInfo ((LooseType) t).description));
+        b->onClick = [this, t] { proc.setLooseType ((LooseType) t); refreshRecipe(); };
+        addAndMakeVisible (b);
+    }
+    oversampleButton.setTooltip ("Run this pad at twice the sample rate: cleaner buzz and rattles, about twice the CPU");
+    oversampleButton.setClickingTogglesState (false);
+    oversampleButton.onClick = [this] { proc.setOversample (! proc.getOversample()); refreshRecipe(); };
+    addAndMakeVisible (oversampleButton);
+    joinKnobs.add (new Knob (s, pid::attachSize, "Size", "The joined part's size"));
+    joinKnobs.add (new Knob (s, pid::jointStiffness, "Stiffness", "How firmly the joint holds"));
+    joinKnobs.add (new Knob (s, pid::attachPlace, "Place", "Where the joint sits on this part: centre to edge"));
+    joinKnobs[0]->valueText = [this] (float u) {
+        const auto t = proc.getAttachPart().value_or (PartType::Box);
+        const auto& c = partInfo (t).controls[0];
+        const double v = c.value (u) * c.display;
+        return juce::String (v, std::abs (v) < 10.0 && c.unit != "%" ? 1 : 0) + (c.unit.empty() ? "" : " " + str (c.unit));
+    };
+    rattleKnobs.add (new Knob (s, pid::rattle, "Rattle", "Snare wires / rivets: pressed tight to hanging loose"));
+    rattleKnobs.add (new Knob (s, pid::looseAmount, "Amount", "How much rice, how many beads"));
+    for (auto* k : joinKnobs) addAndMakeVisible (k);
+    for (auto* k : rattleKnobs) addAndMakeVisible (k);
+
     openBench.onClick = [this] { if (onOpenBench) onOpenBench(); };
     addAndMakeVisible (openBench);
 
@@ -234,9 +293,15 @@ KitView::KitView (FoundryProcessor& p) : proc (p), part (p)
     startTimerHz (30);
 }
 
+KitView::Shown KitView::current() const
+{
+    return { proc.getPartType(), proc.getMaterial(), proc.getStriker(), proc.getMount(), proc.getAttachPart(),
+             proc.getAttachMaterial(), proc.getJoint(), proc.getRattleType(), proc.getLooseType(), proc.getOversample() };
+}
+
 void KitView::refreshRecipe()
 {
-    const Shown now { proc.getPartType(), proc.getMaterial(), proc.getStriker(), proc.getMount() };
+    const Shown now = current();
     const bool partChanged = ! shown || shown->part != now.part;
     shown = now;
     const auto& info = partInfo (now.part);
@@ -264,9 +329,44 @@ void KitView::refreshRecipe()
             shapeKnobs[i]->setLabel (str (c.name), str (info.name) + " " + str (c.name).toLowerCase());
         }
 
-    pads[0]->setRecipe (str (getMaterial (now.material).name) + " " + str (info.name) + juce::String::fromUTF8 (" × ")
-                            + str (strikerInfo (now.striker).name),
-                        now.part);
+    // Add-ons.
+    attachBox.setSelectedId (now.attach ? (int) *now.attach + 2 : 1, juce::dontSendNotification);
+    attachMaterialBox.clear (juce::dontSendNotification);
+    if (now.attach)
+        for (int m = 0; m < (int) kNumMaterials; ++m)
+            if (materialAllowed (*now.attach, (MaterialId) m))
+                attachMaterialBox.addItem (str (getMaterial ((MaterialId) m).name), m + 1);
+    attachMaterialBox.setSelectedId ((int) now.attachMaterial + 1, juce::dontSendNotification);
+    attachMaterialBox.setEnabled (now.attach.has_value());
+    for (int t = 0; t < jointChips.size(); ++t)
+    {
+        jointChips[t]->setToggleState (t == (int) now.joint, juce::dontSendNotification);
+        jointChips[t]->setEnabled (now.attach.has_value());
+    }
+    auto enable = [] (juce::Component& c, bool on) { c.setEnabled (on); c.setAlpha (on ? 1.0f : 0.4f); };
+    for (auto* k : joinKnobs)
+        enable (*k, now.attach.has_value());
+    for (auto* b : jointChips)
+        enable (*b, now.attach.has_value());
+    enable (attachMaterialBox, now.attach.has_value());
+    for (int t = 0; t < rattleChips.size(); ++t)
+        rattleChips[t]->setToggleState (t == (int) now.rattle, juce::dontSendNotification);
+    for (int t = 0; t < looseChips.size(); ++t)
+        looseChips[t]->setToggleState (t == (int) now.loose, juce::dontSendNotification);
+    enable (*rattleKnobs[0], now.rattle != RattleType::None);
+    enable (*rattleKnobs[1], now.loose != LooseType::None);
+    oversampleButton.setToggleState (now.oversample, juce::dontSendNotification);
+
+    // Recipe text, e.g. "Mylar Membrane + Box (bolt) + Snare + Rice x Mallet".
+    juce::String recipe = str (getMaterial (now.material).name) + " " + str (info.name);
+    if (now.attach)
+        recipe << " + " << str (partInfo (*now.attach).name);
+    if (now.rattle != RattleType::None)
+        recipe << " + " << str (rattleInfo (now.rattle).name);
+    if (now.loose != LooseType::None)
+        recipe << " + " << str (looseInfo (now.loose).name);
+    recipe << juce::String::fromUTF8 (" × ") << str (strikerInfo (now.striker).name);
+    pads[0]->setRecipe (recipe, now.part);
     resized(); // the swatch row changes with the part
     repaint();
 }
@@ -275,8 +375,7 @@ void KitView::timerCallback()
 {
     for (auto* p : pads)
         p->decay();
-    if (shown && (shown->part != proc.getPartType() || shown->material != proc.getMaterial()
-                  || shown->striker != proc.getStriker() || shown->mount != proc.getMount()))
+    if (shown && ! (*shown == current()))
         refreshRecipe();
 }
 
@@ -284,8 +383,14 @@ void KitView::paint (juce::Graphics& g)
 {
     g.setColour (colour::panel);
     g.fillRoundedRectangle (recipeArea.toFloat(), radiusLarge);
+    g.fillRoundedRectangle (addOnArea.toFloat(), radiusLarge);
     g.fillRoundedRectangle (treatArea.toFloat(), radiusLarge);
     g.fillRoundedRectangle (macroArea.toFloat(), radiusLarge);
+
+    drawSectionLabel (g, juce::String::fromUTF8 ("Add-ons · Pad 01"), addOnArea.toFloat().reduced (14.0f, 10.0f).removeFromTop (26.0f));
+    drawSectionLabel (g, "Joined to", joinTitle.toFloat(), colour::accent, 10.0f);
+    drawSectionLabel (g, "Rattles", rattleTitle.toFloat(), colour::accent, 10.0f);
+    drawSectionLabel (g, "Loose on top", looseTitle.toFloat(), colour::accent, 10.0f);
 
     drawSectionLabel (g, "Pads", padArea.toFloat().removeFromTop (20.0f).translated (6.0f, 0.0f));
     auto rec = recipeArea.toFloat().reduced (14.0f, 10.0f);
@@ -338,7 +443,42 @@ void KitView::resized()
 
     recipeArea = r.removeFromRight (460);
     r.removeFromRight (10);
+    addOnArea = r.removeFromRight (290);
+    r.removeFromRight (10);
     padArea = r;
+
+    {
+        auto a = addOnArea.reduced (14, 10);
+        oversampleButton.setBounds (a.removeFromTop (26).removeFromRight (44));
+        a.removeFromTop (4);
+        auto chipRow = [] (juce::Rectangle<int> row, auto& buttons) {
+            const int w = row.getWidth() / juce::jmax (1, buttons.size());
+            for (auto* b : buttons)
+                b->setBounds (row.removeFromLeft (w).reduced (2, 0));
+        };
+        joinTitle = a.removeFromTop (16);
+        auto row = a.removeFromTop (28);
+        attachBox.setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (2, 0));
+        attachMaterialBox.setBounds (row.reduced (2, 0));
+        a.removeFromTop (4);
+        chipRow (a.removeFromTop (26), jointChips);
+        a.removeFromTop (2);
+        auto kr = a.removeFromTop (juce::jmin (78, a.getHeight() / 3));
+        const int kw = kr.getWidth() / 3;
+        for (auto* k : joinKnobs)
+            k->setBounds (kr.removeFromLeft (kw).reduced (2, 0));
+        a.removeFromTop (6);
+        rattleTitle = a.removeFromTop (16);
+        chipRow (a.removeFromTop (26), rattleChips);
+        a.removeFromTop (6);
+        looseTitle = a.removeFromTop (16);
+        chipRow (a.removeFromTop (26), looseChips);
+        a.removeFromTop (2);
+        auto k2 = a.removeFromTop (juce::jmin (78, a.getHeight()));
+        const int kw2 = k2.getWidth() / 3;
+        rattleKnobs[0]->setBounds (k2.removeFromLeft (kw2).reduced (2, 0));
+        rattleKnobs[1]->setBounds (k2.removeFromLeft (kw2).reduced (2, 0));
+    }
 
     auto grid = padArea.withTrimmedTop (22);
     const int cw = grid.getWidth() / 4, ch = grid.getHeight() / 2;

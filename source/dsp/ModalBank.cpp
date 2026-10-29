@@ -49,6 +49,49 @@ void ModalBank::step (const double* shape, double force) noexcept
     }
 }
 
+void ModalBank::stepForces (const double* modalForce) noexcept
+{
+    const int n = inst->n;
+    const double *a11 = inst->a11.data(), *a12 = inst->a12.data(), *a21 = inst->a21.data(),
+                 *a22 = inst->a22.data(), *b1 = inst->b1.data(), *b2 = inst->b2.data();
+    double* qq = q.data();
+    double* vv = v.data();
+    for (int k = 0; k < n; ++k)
+    {
+        const double f = modalForce[k];
+        const double qn = a11[k] * qq[k] + a12[k] * vv[k] + b1[k] * f;
+        const double vn = a21[k] * qq[k] + a22[k] * vv[k] + b2[k] * f;
+        qq[k] = qn;
+        vv[k] = vn;
+    }
+}
+
+void ModalBank::predictFreeModes (double* out, int m) const noexcept
+{
+    const double* a11 = inst->a11.data();
+    const double* a12 = inst->a12.data();
+    const double* qq = q.data();
+    const double* vv = v.data();
+    for (int k = 0; k < m; ++k)
+        out[k] = a11[k] * qq[k] + a12[k] * vv[k];
+}
+
+double ModalBank::dot (const double* a, const double* b, int m) noexcept
+{
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int k = 0;
+    for (; k + 4 <= m; k += 4)
+    {
+        s0 += a[k] * b[k];
+        s1 += a[k + 1] * b[k + 1];
+        s2 += a[k + 2] * b[k + 2];
+        s3 += a[k + 3] * b[k + 3];
+    }
+    for (; k < m; ++k)
+        s0 += a[k] * b[k];
+    return (s0 + s1) + (s2 + s3);
+}
+
 void ModalBank::stepFree() noexcept
 {
     const int n = inst->n;
@@ -114,9 +157,24 @@ void ModalBank::transferFrom (const ModalBank& other) noexcept
     // (the old instrument still crossfades out).
     if (src->basis->type() != dst->basis->type())
         return;
+    // Joined parts: carry the state over only when the structure is the same (an edit to a
+    // knob that didn't change the mode count); the crossfade covers the rest.
+    if (src->hasAttachment() || dst->hasAttachment())
+    {
+        if (src->hasAttachment() && dst->hasAttachment() && src->attachBasis->type() == dst->attachBasis->type()
+            && src->nExact == dst->nExact && src->n == dst->n && src->oversample == dst->oversample)
+            for (int k = 0; k < dst->n; ++k)
+            {
+                q[(size_t) k] = other.q[(size_t) k];
+                v[(size_t) k] = other.v[(size_t) k];
+            }
+        return;
+    }
+    if (src->oversample != dst->oversample)
+        return;
 
     // Exact part: old treated modes -> untreated basis coordinates -> new treated modes.
-    std::array<double, kMaxExactModes> uq {}, uv {};
+    std::array<double, kMaxCombinedExact> uq {}, uv {};
     const int ns = src->nExact;
     if (src->X.empty())
     {
@@ -144,7 +202,7 @@ void ModalBank::transferFrom (const ModalBank& other) noexcept
         uq[(size_t) i] *= ratio;
         uv[(size_t) i] *= ratio;
     }
-    for (int i = nm; i < kMaxExactModes; ++i) { uq[(size_t) i] = 0.0; uv[(size_t) i] = 0.0; }
+    for (int i = nm; i < kMaxCombinedExact; ++i) { uq[(size_t) i] = 0.0; uv[(size_t) i] = 0.0; }
 
     if (dst->X.empty())
     {

@@ -28,7 +28,18 @@ const char* kHelp = R"(render_cli: render Foundry hits offline and analyse them.
   --mount N|NAME        0/1 or the mount's name (On cords, Clamped, Hung, Framed, Resting, ...)
   --shape-a/-b/-c U     the part's three shape controls, normalised 0..1 (default: the part's)
   --profile U           shorthand for --shape-b on a Shell (0 bowl .. 1 bell)
-  --striker NAME        Mallet | Hammer | Hand | Drop (Mallet)
+  --striker NAME        Mallet | Hammer | Hand | Drop | Brush | Scrape (Mallet)
+  --attach NAME         join a second part (any part name) to the main one
+  --attach-material M   its material (default: that part's own)
+  --attach-size U       its first shape control, normalised 0..1 (default: the part's)
+  --joint NAME          Bolt | Rubber (Bolt)
+  --joint-stiffness U   0..1 within the joint's range (0.5)
+  --attach-place U      where on the main part, 0 centre .. 1 edge (0.6)
+  --rattles NAME        None | Snare | Sizzle (None)
+  --rattle U            0 tight .. 1 loose (0.5)
+  --loose NAME          None | Rice | Beads | Sand | Chain (None)
+  --loose-amount U      how many, 0..1 (0.5)
+  --oversample          run the modes at 2x the sample rate
   --force, --hardness, --spread, --position     0..1
   --mass KG             mallet mass (0.012, Mallet only)
   --air-mix U           0 contact mic .. 1 air mic (0)
@@ -107,6 +118,23 @@ int main (int argc, char** argv)
         spec.part.shape[1] = 1.0;
     if (args.contains ("--profile"))
         spec.part.shape[1] = std::clamp (opt ("--profile", 0.0), 0.0, 1.0);
+    if (args.contains ("--attach"))
+    {
+        const auto an = optS ("--attach", "Box");
+        spec.attach.enabled = true;
+        spec.attach.part = PartSpec::defaultFor (partFromName (an.toStdString(), PartType::Box));
+        if (an.equalsIgnoreCase ("Bell")) spec.attach.part.shape[1] = 1.0;
+        if (args.contains ("--attach-material"))
+            spec.attach.part.material = materialFromName (optS ("--attach-material", "").toStdString(), spec.attach.part.material);
+        spec.attach.part.shape[0] = std::clamp (opt ("--attach-size", spec.attach.part.shape[0]), 0.0, 1.0);
+        spec.attach.joint = jointFromName (optS ("--joint", "Bolt").toStdString(), JointType::Bolt);
+        spec.attach.stiffness = std::clamp (opt ("--joint-stiffness", 0.5), 0.0, 1.0);
+        spec.attach.place = std::clamp (opt ("--attach-place", 0.6), 0.0, 1.0);
+    }
+    spec.rattle.type = rattleFromName (optS ("--rattles", "None").toStdString(), RattleType::None);
+    spec.loose.type = looseFromName (optS ("--loose", "None").toStdString(), LooseType::None);
+    spec.loose.amount = std::clamp (opt ("--loose-amount", 0.5), 0.0, 1.0);
+    spec.oversample = args.contains ("--oversample");
     spec.tuneSemitones = opt ("--tune", 0.0);
     spec.quality = (int) opt ("--quality", 96);
     auto& t = spec.treatments;
@@ -135,6 +163,7 @@ int main (int argc, char** argv)
     pp.striker = strikerFromName (optS ("--striker", "Mallet").toStdString(), StrikerType::Mallet);
     pp.airMix = std::clamp (opt ("--air-mix", 0.0), 0.0, 1.0);
     pp.micDistance = std::clamp (opt ("--mic-distance", 0.5), 0.1, 3.0);
+    pp.rattle = std::clamp (opt ("--rattle", 0.5), 0.0, 1.0);
     pp.level = 1.0;
 
     std::vector<Hit> hits;
@@ -175,12 +204,26 @@ int main (int argc, char** argv)
             continue;
         }
         voice.process (L.data() + pos, R.data() + pos, 1);
-        const double e = voice.energy();
+        // Rattles and loose objects trade energy with the part (and with gravity), so with
+        // them the check is that the total never climbs above where the hit left it.
+        const bool hasContacts = ! ci->contacts.empty();
+        const double e = voice.energy() + voice.contactEnergy();
         maxEnergy = std::max (maxEnergy, e);
-        if (voice.striker().isActive())
+        if (voice.striker().isActive() || voice.isSweeping())
         {
-            contactSamples = voice.striker().contactSamples();
-            peakForce = std::max (peakForce, voice.striker().peakForce());
+            if (voice.striker().isActive())
+            {
+                contactSamples = voice.striker().contactSamples();
+                peakForce = std::max (peakForce, voice.striker().peakForce());
+            }
+            energyAfterLastHit = -1.0;
+        }
+        else if (hasContacts)
+        {
+            if (energyAfterLastHit < 0.0)
+                energyAfterLastHit = e;
+            else if (e > 1.05 * energyAfterLastHit + 1e-12)
+                energyGrew = true;
         }
         else
         {
@@ -273,6 +316,13 @@ int main (int argc, char** argv)
         report->setProperty ("shape", juce::var (sh));
     }
     report->setProperty ("airMix", pp.airMix);
+    if (spec.attach.enabled)
+        report->setProperty ("attach", juce::String (partInfo (spec.attach.part.type).name.data()) + " ("
+                                           + juce::String (jointInfo (spec.attach.joint).name.data()) + ")");
+    report->setProperty ("rattles", juce::String (rattleInfo (spec.rattle.type).name.data()));
+    report->setProperty ("loose", juce::String (looseInfo (spec.loose.type).name.data()));
+    report->setProperty ("contacts", (int) ci->contacts.size());
+    report->setProperty ("oversample", ci->oversample);
     report->setProperty ("peakDbfs", juce::Decibels::gainToDecibels ((double) peak, -200.0));
     report->setProperty ("finite", finite);
     report->setProperty ("clipped", peak >= 1.0f);
@@ -281,7 +331,7 @@ int main (int argc, char** argv)
     report->setProperty ("modesTotal", ci->n);
     report->setProperty ("solveMs", ci->solveMilliseconds);
     report->setProperty ("grit", ci->grit);
-    report->setProperty ("contactMsLastHit", 1000.0 * contactSamples / sr);
+    report->setProperty ("contactMsLastHit", 1000.0 * contactSamples / ci->sampleRate);
     report->setProperty ("peakForceN", peakForce);
     report->setProperty ("fundamentalHz", f0);
     report->setProperty ("t60FundamentalPredicted", t60Predicted);
@@ -325,7 +375,7 @@ int main (int argc, char** argv)
               << (mainK != 0 ? ", loudest " + juce::String (mainHz, 1) + " Hz T60 " + juce::String (mainT60Measured, 2) + " s (predicted "
                                    + juce::String (mainT60Predicted, 2) + ")"
                              : juce::String())
-              << ", contact " << juce::String (1000.0 * contactSamples / sr, 2) << " ms, "
+              << ", contact " << juce::String (1000.0 * contactSamples / ci->sampleRate, 2) << " ms, "
               << ci->n << " modes solved in " << juce::String (ci->solveMilliseconds, 1) << " ms"
               << (finite ? "" : "  NON-FINITE!") << (energyGrew ? "  ENERGY GREW!" : "")
               << (peak >= 1.0f ? "  CLIPPED!" : "") << "\n";

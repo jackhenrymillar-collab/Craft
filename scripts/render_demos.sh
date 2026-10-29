@@ -48,3 +48,22 @@ mkdir -p "$OUT"
 "$R" --out "$OUT/25_bowl_air_mic_0.5m.wav"   --part Bowl --hardness 0.3 --at 0.35,0.5 --air-mix 1 --mic-distance 0.5 --length 6
 "$R" --out "$OUT/25b_bowl_contact_mic.wav"  --part Bowl --hardness 0.3 --at 0.35,0.5 --air-mix 0 --length 6
 "$R" --out "$OUT/26_steel_bar_glock.wav" --part Bar --material Steel --hardness 0.7 --at 0.0,0 --length 4
+
+# M3: rattles, loose objects, joined parts, brush and scrape.
+"$R" --out "$OUT/27_snare_tight.wav"        --rattles Snare --rattle 0.1 --hardness 0.8 --at 0.3,0 --length 2
+"$R" --out "$OUT/28_snare_loose.wav"        --rattles Snare --rattle 0.9 --hardness 0.8 --at 0.3,0 --length 2
+"$R" --out "$OUT/29_snare_roll.wav"         --rattles Snare --rattle 0.5 --hardness 0.7 --spread 0.3 --length 3 \
+     --hits 0:0.4,0.1:0.3,0.2:0.5,0.3:0.35,0.4:0.6,0.5:0.4,0.6:0.7,0.7:0.5,0.8:0.9
+"$R" --out "$OUT/30_sizzle_plate.wav"       --part Plate --rattles Sizzle --rattle 0.7 --hardness 0.6 --at 0.45,0.7 --length 5
+"$R" --out "$OUT/31_rice_on_drum.wav"       --loose Rice --loose-amount 0.8 --hardness 0.5 --at 0.3,0 --length 3
+"$R" --out "$OUT/32_beads_in_glass_bowl.wav" --part Bowl --material Glass --loose Beads --loose-amount 0.6 --hardness 0.4 --at 0.5,0 --length 5
+"$R" --out "$OUT/33_chain_on_plate.wav"     --part Plate --loose Chain --hardness 0.7 --at 0.45,0.7 --length 4
+"$R" --out "$OUT/34_sand_on_drum.wav"       --loose Sand --loose-amount 1 --hardness 0.5 --at 0.3,0 --length 2
+"$R" --out "$OUT/35_drum_bolted_to_box.wav" --attach Box --joint Bolt --joint-stiffness 0.6 --hardness 0.6 --at 0.3,0 --length 3
+"$R" --out "$OUT/36_bar_on_rubber_over_box.wav" --part Bar --attach Box --joint Rubber --joint-stiffness 0.4 --hardness 0.4 --at 0.0,0 --length 3
+"$R" --out "$OUT/37_bar_bolted_to_plate.wav" --part Bar --material Steel --attach Plate --joint Bolt --hardness 0.7 --at 0.0,0 --length 4
+"$R" --out "$OUT/38_brush_on_snare.wav"     --rattles Snare --striker Brush --hardness 0.6 --hits 0:0.9,0.5:0.7 --length 2
+"$R" --out "$OUT/39_scrape_ridged_box.wav"  --part Box --striker Scrape --hardness 0.9 --hits 0:1,0.6:0.8 --length 2
+"$R" --out "$OUT/40_brush_on_plate.wav"     --part Plate --striker Brush --hardness 0.8 --hits 0:1 --length 4
+"$R" --out "$OUT/41_snare_2x_oversampled.wav" --rattles Snare --rattle 0.5 --hardness 0.8 --at 0.3,0 --oversample --length 2
+"$R" --out "$OUT/42_everything.wav"         --attach Box --rattles Snare --loose Rice --loose-amount 0.5 --hardness 0.7 --at 0.3,0 --length 3
