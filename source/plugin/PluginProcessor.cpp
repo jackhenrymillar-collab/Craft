@@ -15,22 +15,31 @@ FoundryProcessor::FoundryProcessor()
     live.position = apvts.getRawParameterValue (params::id::position);
     live.level = apvts.getRawParameterValue (params::id::level);
     live.pan = apvts.getRawParameterValue (params::id::pan);
+    live.airMix = apvts.getRawParameterValue (params::id::airMix);
+    live.micDistance = apvts.getRawParameterValue (params::id::micDistance);
 
     for (auto* p : getParameters())
         if (auto* wp = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
             if (params::affectsModes (wp->paramID))
                 apvts.addParameterListener (wp->paramID, this);
 
-    apvts.state.setProperty (params::headMaterial, juce::String (getMaterial (MaterialId::Mylar).name.data()), nullptr);
+    apvts.state.setProperty (params::partType, juce::String (partInfo (PartType::Membrane).name.data()), nullptr);
+    apvts.state.setProperty (params::material, juce::String (foundry::getMaterial (MaterialId::Mylar).name.data()), nullptr);
+    apvts.state.setProperty (params::mount, 0, nullptr);
+    apvts.state.setProperty (params::striker, juce::String (strikerInfo (StrikerType::Mallet).name.data()), nullptr);
     apvts.state.addListener (this);
 
     worker = std::make_unique<CompileWorker> (exchange);
     worker->setListener ([this] (const CompiledInstrument& ci) {
         InstrumentSnapshot s;
         s.features = ci.features;
-        s.radius = ci.radius;
-        s.contactMic = ci.spec.contactMic;
-        s.material = ci.spec.membrane.material;
+        s.part = ci.partType();
+        s.halfExtents = ci.basis->halfExtents();
+        s.round = ci.basis->isRound();
+        s.mount = ci.spec.part.mount;
+        s.shape = ci.spec.part.shape;
+        s.contactMic = ci.place (ci.spec.mic.contact);
+        s.material = ci.spec.part.material;
         s.modes = ci.n;
         s.exactModes = ci.nExact;
         s.solveMs = ci.solveMilliseconds;
@@ -65,7 +74,11 @@ InstrumentSpec FoundryProcessor::buildSpec() const
 {
     auto get = [this] (const char* pid) { return (double) apvts.getRawParameterValue (pid)->load(); };
     InstrumentSpec s;
-    s.membrane.material = getHeadMaterial();
+    s.part = PartSpec::defaultFor (getPartType());
+    s.part.material = getMaterial();
+    s.part.mount = getMount();
+    for (int i = 0; i < 3; ++i)
+        s.part.shape[(size_t) i] = get (params::id::shape[i]);
     s.tuneSemitones = get (params::id::tune);
     auto& t = s.treatments;
     t.age.amount = get (params::id::ageAmount);
@@ -119,6 +132,9 @@ PadParams FoundryProcessor::readLiveParams() const noexcept
     p.strikePosition = live.position->load();
     p.level = juce::Decibels::decibelsToGain ((double) live.level->load(), -60.0);
     p.pan = live.pan->load();
+    p.airMix = live.airMix->load();
+    p.micDistance = live.micDistance->load();
+    p.striker = (StrikerType) juce::jlimit (0, kNumStrikerTypes - 1, strikerType.load (std::memory_order_relaxed));
     return p;
 }
 
@@ -170,8 +186,8 @@ void FoundryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             for (int i = 0; i < size; ++i)
             {
                 const auto& h = hitBuffer[(size_t) (start + i)];
-                if (h.r < 0.0f) voice.trigger (h.velocity);
-                else voice.triggerAt (h.velocity, h.r, h.theta);
+                if (! h.atPoint) voice.trigger (h.velocity);
+                else voice.triggerAtPoint (h.velocity, { h.x, h.y });
             }
         };
         play (scope.startIndex1, scope.blockSize1);
@@ -214,26 +230,88 @@ void FoundryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     while (peak > prev && ! peakLevel.compare_exchange_weak (prev, peak)) {}
 }
 
-void FoundryProcessor::queueHit (float velocity, float r, float theta)
+void FoundryProcessor::queueHit (float velocity)
 {
     std::lock_guard g (hitWriteLock);
     const auto scope = hitFifo.write (1);
-    if (scope.blockSize1 > 0)
-        hitBuffer[(size_t) scope.startIndex1] = { velocity, r, theta };
-    else if (scope.blockSize2 > 0)
-        hitBuffer[(size_t) scope.startIndex2] = { velocity, r, theta };
+    const UiHit h { velocity, false, 0.0f, 0.0f };
+    if (scope.blockSize1 > 0) hitBuffer[(size_t) scope.startIndex1] = h;
+    else if (scope.blockSize2 > 0) hitBuffer[(size_t) scope.startIndex2] = h;
 }
 
-void FoundryProcessor::setHeadMaterial (MaterialId m)
+void FoundryProcessor::queueTap (float velocity, Vec2 p)
 {
-    apvts.state.setProperty (params::headMaterial, juce::String (getMaterial (m).name.data()), nullptr);
+    std::lock_guard g (hitWriteLock);
+    const auto scope = hitFifo.write (1);
+    const UiHit h { velocity, true, (float) p.x, (float) p.y };
+    if (scope.blockSize1 > 0) hitBuffer[(size_t) scope.startIndex1] = h;
+    else if (scope.blockSize2 > 0) hitBuffer[(size_t) scope.startIndex2] = h;
 }
 
-MaterialId FoundryProcessor::getHeadMaterial() const
+void FoundryProcessor::setPartType (PartType t)
 {
-    const auto name = apvts.state.getProperty (params::headMaterial).toString().toStdString();
-    const auto m = materialFromName (name, MaterialId::Mylar);
-    return getMaterial (m).arealDensity > 0.0 ? m : MaterialId::Mylar;
+    if (t == getPartType())
+        return;
+    const auto& info = partInfo (t);
+    auto& st = apvts.state;
+    st.setProperty (params::partType, juce::String (info.name.data()), nullptr);
+    st.setProperty (params::material, juce::String (foundry::getMaterial (info.defaultMaterial).name.data()), nullptr);
+    st.setProperty (params::mount, 0, nullptr);
+    for (int i = 0; i < 3; ++i)
+        if (auto* p = apvts.getParameter (params::id::shape[i]))
+            p->setValueNotifyingHost ((float) info.controls[(size_t) i].defaultNormalised());
+    specDirty = true;
+}
+
+PartType FoundryProcessor::getPartType() const
+{
+    return partFromName (apvts.state.getProperty (params::partType).toString().toStdString(), PartType::Membrane);
+}
+
+void FoundryProcessor::setMaterial (MaterialId m)
+{
+    if (materialAllowed (getPartType(), m))
+        apvts.state.setProperty (params::material, juce::String (foundry::getMaterial (m).name.data()), nullptr);
+}
+
+MaterialId FoundryProcessor::getMaterial() const
+{
+    const auto type = getPartType();
+    const auto m = materialFromName (apvts.state.getProperty (params::material).toString().toStdString(), partInfo (type).defaultMaterial);
+    return materialAllowed (type, m) ? m : partInfo (type).defaultMaterial;
+}
+
+void FoundryProcessor::setMount (int m)
+{
+    apvts.state.setProperty (params::mount, juce::jlimit (0, partInfo (getPartType()).mountCount - 1, m), nullptr);
+}
+
+int FoundryProcessor::getMount() const
+{
+    return juce::jlimit (0, partInfo (getPartType()).mountCount - 1, (int) apvts.state.getProperty (params::mount, 0));
+}
+
+void FoundryProcessor::setStriker (StrikerType t)
+{
+    apvts.state.setProperty (params::striker, juce::String (strikerInfo (t).name.data()), nullptr);
+}
+
+StrikerType FoundryProcessor::getStriker() const
+{
+    return strikerFromName (apvts.state.getProperty (params::striker).toString().toStdString(), StrikerType::Mallet);
+}
+
+void FoundryProcessor::migrateState()
+{
+    // M1 sessions had one drum and stored its head material as "headMaterial".
+    auto& st = apvts.state;
+    if (! st.hasProperty (params::partType))
+        st.setProperty (params::partType, juce::String (partInfo (PartType::Membrane).name.data()), nullptr);
+    if (! st.hasProperty (params::material))
+        st.setProperty (params::material, st.getProperty (params::headMaterial, "Mylar"), nullptr);
+    if (! st.hasProperty (params::striker))
+        st.setProperty (params::striker, juce::String (strikerInfo (StrikerType::Mallet).name.data()), nullptr);
+    strikerType = (int) getStriker();
 }
 
 InstrumentSnapshot FoundryProcessor::getSnapshot() const
@@ -249,8 +327,10 @@ void FoundryProcessor::parameterChanged (const juce::String&, float)
 
 void FoundryProcessor::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier& prop)
 {
-    if (prop == params::headMaterial)
+    if (prop == params::partType || prop == params::material || prop == params::mount)
         specDirty = true;
+    else if (prop == params::striker)
+        strikerType = (int) getStriker();
 }
 
 void FoundryProcessor::timerCallback()
@@ -273,6 +353,7 @@ void FoundryProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
             apvts.state.addListener (this);
+            migrateState();
             specDirty = true;
         }
 }

@@ -236,25 +236,6 @@ void MembraneBasis::shapesAndGradients (Vec2 p, double* phi, double* gx, double*
     }
 }
 
-void MembraneBasis::quadrature (std::vector<QuadPoint>& out, int resolution) const
-{
-    // Polar midpoint rule: nr rings, angular count growing with radius.
-    const double a = params.radius;
-    const int nr = std::max (4, resolution / 2);
-    const double dr = a / nr;
-    for (int i = 0; i < nr; ++i)
-    {
-        const double r = (i + 0.5) * dr;
-        const int nt = std::max (6, (int) std::ceil (2.0 * std::numbers::pi * r / dr));
-        const double dt = 2.0 * std::numbers::pi / nt;
-        for (int j = 0; j < nt; ++j)
-        {
-            const double t = (j + 0.5 * (i & 1)) * dt;
-            out.push_back ({ { r * std::cos (t), r * std::sin (t) }, r * dr * dt });
-        }
-    }
-}
-
 void MembraneBasis::addStiffness (const double* phi, const double* gx, const double* gy,
                                   double weight, double fIso, Sym2 S, double* K) const noexcept
 {

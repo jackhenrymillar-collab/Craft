@@ -162,7 +162,7 @@ TEST_CASE ("Age follows each material's rules", "[treatments][age]")
     SECTION ("calf hide: dry tightens it, damp makes it slack")
     {
         auto spec = defaultSpec();
-        spec.membrane.material = MaterialId::Hide;
+        spec.part.material = MaterialId::Hide;
         auto fresh = compileInstrument (spec, 48000.0);
         spec.treatments.age.amount = 1.0;
         spec.treatments.age.climate = 0.0;
@@ -178,7 +178,7 @@ TEST_CASE ("Age follows each material's rules", "[treatments][age]")
         for (int m = 0; m < (int) kNumMaterials; ++m)
         {
             auto spec = defaultSpec();
-            spec.membrane.material = (MaterialId) m;
+            spec.part.material = (MaterialId) m;
             spec.treatments.age.amount = 1.0;
             spec.treatments.age.climate = 1.0;
             auto ci = compileInstrument (spec, 48000.0);

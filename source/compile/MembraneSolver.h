@@ -34,16 +34,19 @@ public:
 
     explicit MembraneBasis (const Params& p);
 
+    PartType type() const noexcept override { return PartType::Membrane; }
     int size() const noexcept override { return static_cast<int> (modes.size()); }
     double omega (int k) const noexcept override { return modes[(size_t) k].omega; }
+    Vec2 halfExtents() const noexcept override { return { params.radius, params.radius }; }
+    bool isRound() const noexcept override { return true; }
     bool contains (Vec2 p) const noexcept override;
-    double characteristicSize() const noexcept override { return params.radius; }
     double area() const noexcept override;
     double massPerArea() const noexcept override { return params.arealDensity; }
+    double referenceTension() const noexcept override { return params.tension; }
+    double normalisation (int k) const noexcept override { return modes[(size_t) k].norm; }
 
     void shapes (Vec2 p, double* phi) const noexcept override;
     void shapesAndGradients (Vec2 p, double* phi, double* gx, double* gy) const noexcept override;
-    void quadrature (std::vector<QuadPoint>& out, int resolution) const override;
     void addStiffness (const double* phi, const double* gx, const double* gy,
                        double weight, double fIso, Sym2 aniso, double* K) const noexcept override;
 
@@ -59,8 +62,6 @@ public:
 
     static Vec2 polarToLocal (double rFraction, double theta, double radius) noexcept;
 
-private:
-public:
     static constexpr int kTable = 512;
     struct Radial
     {

@@ -1,42 +1,63 @@
 #pragma once
 
 #include "Materials.h"
+#include "PartCatalogue.h"
 #include "Treatments.h"
+
+#include <array>
 
 namespace foundry
 {
 
-// M1 instrument description: one circular membrane, one mallet, one contact mic.
-// This becomes a ValueTree-backed graph in M2+; the compile step reads this plain
-// struct so it can run on any thread.
+// Instrument description for one pad: one resonating part, where it's struck, and how it's
+// picked up. This becomes a ValueTree-backed graph with joints at M3+; the compile step
+// reads this plain struct so it can run on any thread.
 
-struct MembraneSpec
+struct PartSpec
 {
-    double radius = 0.178;     // m (14" head)
-    double tension = 2000.0;   // N/m
+    PartType type = PartType::Membrane;
     MaterialId material = MaterialId::Mylar;
+    // The part's three shape controls, normalised 0..1 (see PartCatalogue for meaning/range).
+    std::array<double, 3> shape { 0.5, 0.5, 0.5 };
+    int mount = 0;                // index into PartInfo::mounts
     double highFreqDamping = 0.2; // extra loss per kHz (1 + h * f/1kHz)
-};
 
-struct MalletSpec
-{
-    double hardness = 0.5;     // 0 felt .. 1 hard plastic/wood tip
-    double mass = 0.012;       // kg, effective stick/beater mass
+    [[nodiscard]] double control (int i) const noexcept
+    {
+        return partInfo (type).controls[(size_t) i].value (shape[(size_t) i]);
+    }
+
+    // A part of the given type with its default material, shape and mount.
+    static PartSpec defaultFor (PartType t) noexcept
+    {
+        PartSpec p;
+        p.type = t;
+        const auto& info = partInfo (t);
+        p.material = info.defaultMaterial;
+        for (size_t i = 0; i < 3; ++i)
+            p.shape[i] = info.controls[i].defaultNormalised();
+        return p;
+    }
 };
 
 struct PointPolar
 {
-    double r = 0.0;            // 0 centre .. 1 rim (fraction of radius)
+    double r = 0.0;            // 0 centre .. 1 edge (fraction of the part's half-size)
     double theta = 0.0;        // radians
+};
+
+struct MicSpec
+{
+    PointPolar contact { 0.82, 1.1 };  // contact mic position on the part
+    // The air mic's mix and distance are live voice controls (PadParams), not compiled.
 };
 
 struct InstrumentSpec
 {
-    MembraneSpec membrane;
-    MalletSpec mallet;
+    PartSpec part = PartSpec::defaultFor (PartType::Membrane);
     PointPolar strike { 0.3, 0.0 };
-    double strikeSpread = 0.05;    // random radial/angle jitter per hit (fraction of radius)
-    PointPolar contactMic { 0.82, 1.1 };
+    double strikeSpread = 0.05;    // random radial/angle jitter per hit (fraction of size)
+    MicSpec mic;
     double tuneSemitones = 0.0;    // Size/Tune: scales the whole object
     int quality = 96;              // max number of exactly-solved modes
     int highBandModes = 96;        // statistical modes covering the dense top end

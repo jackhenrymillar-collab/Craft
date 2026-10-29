@@ -1,12 +1,14 @@
 #pragma once
 
 #include "plugin/PluginProcessor.h"
-#include "ui/common/HeadView.h"
 #include "ui/common/Knob.h"
+#include "ui/common/PartView.h"
+
+#include <optional>
 
 namespace foundry
 {
-// Pad tile in the 4x2 grid. Only pad 1 is live in M1; the rest arrive in M4.
+// Pad tile in the 4x2 grid. Only pad 1 is live so far; the rest arrive in M4.
 class PadTile final : public juce::Component
 {
 public:
@@ -18,7 +20,7 @@ public:
     std::function<void (float)> onHit;
     std::function<void()> onOpenBench;
     bool selected = false;
-    void setRecipe (juce::String r) { recipe = std::move (r); repaint(); }
+    void setRecipe (juce::String r, PartType t) { recipe = std::move (r); glyph = t; repaint(); }
     void flash() { flashAlpha = 1.0f; repaint(); }
     void decay() { if (flashAlpha > 0.0f) { flashAlpha = juce::jmax (0.0f, flashAlpha - 0.12f); repaint(); } }
 
@@ -26,7 +28,17 @@ private:
     int number;
     juce::String name, recipe;
     bool live;
+    PartType glyph = PartType::Membrane;
     float flashAlpha = 0.0f;
+};
+
+// Square material swatch drawn in the bench style; accent ring when selected.
+class MaterialSwatch final : public juce::Button
+{
+public:
+    explicit MaterialSwatch (MaterialId m);
+    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    const MaterialId material;
 };
 
 class KitView final : public juce::Component, private juce::Timer
@@ -40,14 +52,21 @@ public:
 
 private:
     void timerCallback() override;
-    void refreshMaterialChips();
+    void refreshRecipe();   // chips, swatches, shape-knob labels and the pad text
 
     FoundryProcessor& proc;
     juce::OwnedArray<PadTile> pads;
-    HeadView head;
+    PartView part;
 
-    juce::OwnedArray<juce::TextButton> materialChips;
+    juce::OwnedArray<juce::TextButton> objectChips, strikerChips, mountChips;
+    juce::OwnedArray<MaterialSwatch> swatches;
     juce::TextButton openBench { "Open on bench" };
+    juce::OwnedArray<Knob> shapeKnobs;
+
+    // What the recipe panel last showed, so state changes from anywhere (undo, presets,
+    // the host) are picked up by the timer.
+    struct Shown { PartType part; MaterialId material; StrikerType striker; int mount; };
+    std::optional<Shown> shown;
 
     struct Group
     {
@@ -58,5 +77,6 @@ private:
     std::array<Group, 4> treatments;
     juce::OwnedArray<Knob> macros;
     juce::Rectangle<int> padArea, recipeArea, treatArea, macroArea;
+    juce::Rectangle<int> objectRow, materialRow, strikerRow, mountRow;
 };
 } // namespace foundry

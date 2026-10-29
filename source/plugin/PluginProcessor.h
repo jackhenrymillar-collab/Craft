@@ -17,8 +17,12 @@ namespace foundry
 struct InstrumentSnapshot
 {
     std::vector<TreatmentFeature> features;
-    double radius = 0.178;
-    PointPolar contactMic;
+    PartType part = PartType::Membrane;
+    Vec2 halfExtents { 0.178, 0.178 };
+    bool round = true;
+    int mount = 0;
+    std::array<double, 3> shape { 0.5, 0.5, 0.5 };
+    Vec2 contactMic;
     MaterialId material = MaterialId::Mylar;
     int modes = 0, exactModes = 0;
     double solveMs = 0.0;
@@ -61,11 +65,21 @@ public:
 
     juce::AudioProcessorValueTreeState& state() noexcept { return apvts; }
 
-    // UI -> audio: play pad 1 (r < 0 means "use the strike position parameter").
-    void queueHit (float velocity, float r = -1.0f, float theta = 0.0f);
+    // UI -> audio: play pad 1 at the Position/Spread setting, or at a point on the part
+    // (part-local metres, tap test).
+    void queueHit (float velocity);
+    void queueTap (float velocity, Vec2 localPoint);
 
-    void setHeadMaterial (MaterialId m);
-    MaterialId getHeadMaterial() const;
+    // Structural choices (state tree, not automatable). Changing the part resets its
+    // material, mount and shape controls to that part's defaults.
+    void setPartType (PartType t);
+    PartType getPartType() const;
+    void setMaterial (MaterialId m);
+    MaterialId getMaterial() const;
+    void setMount (int mount);
+    int getMount() const;
+    void setStriker (StrikerType t);
+    StrikerType getStriker() const;
 
     InstrumentSnapshot getSnapshot() const;
     std::uint64_t snapshotVersion() const noexcept { return snapshotCounter.load(); }
@@ -91,7 +105,7 @@ private:
 
     std::atomic<bool> specDirty { true };
 
-    struct UiHit { float velocity, r, theta; };
+    struct UiHit { float velocity; bool atPoint; float x, y; };
     juce::AbstractFifo hitFifo { 32 };
     std::array<UiHit, 32> hitBuffer {};
     std::mutex hitWriteLock; // several UI callers may queue; the audio thread never takes it
@@ -105,8 +119,10 @@ private:
     struct LiveParams
     {
         std::atomic<float>* force = nullptr, *hardness = nullptr, *spread = nullptr, *position = nullptr,
-                          *level = nullptr, *pan = nullptr;
+                          *level = nullptr, *pan = nullptr, *airMix = nullptr, *micDistance = nullptr;
     } live;
+    std::atomic<int> strikerType { 0 };
+    void migrateState();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FoundryProcessor)
 };

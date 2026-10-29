@@ -110,6 +110,10 @@ void ModalBank::transferFrom (const ModalBank& other) noexcept
     const auto* dst = inst;
     if (src == nullptr || dst == nullptr)
         return;
+    // Only the same kind of part has comparable modes; anything else starts from rest
+    // (the old instrument still crossfades out).
+    if (src->basis->type() != dst->basis->type())
+        return;
 
     // Exact part: old treated modes -> untreated basis coordinates -> new treated modes.
     std::array<double, kMaxExactModes> uq {}, uv {};
@@ -131,12 +135,12 @@ void ModalBank::transferFrom (const ModalBank& other) noexcept
     }
 
     // Basis modes keep their order across recompiles, so map by index, rescaling so the
-    // physical displacement field (in normalised radius) is unchanged.
+    // physical displacement field (in normalised coordinates) is unchanged.
     const int nd = dst->nExact;
     const int nm = ns < nd ? ns : nd;
     for (int i = 0; i < nm; ++i)
     {
-        const double ratio = src->basis->mode (i).norm / dst->basis->mode (i).norm;
+        const double ratio = src->basis->normalisation (i) / dst->basis->normalisation (i);
         uq[(size_t) i] *= ratio;
         uv[(size_t) i] *= ratio;
     }
