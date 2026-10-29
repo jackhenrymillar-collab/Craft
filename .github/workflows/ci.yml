@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS (AU + VST3)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: pluginval + auval
+        run: scripts/pluginval.sh build 10
+      - name: Render demos
+        run: scripts/render_demos.sh build renders
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foundry-macos
+          path: |
+            build/source/plugin/Foundry_artefacts/Release/AU
+            build/source/plugin/Foundry_artefacts/Release/VST3
+            renders
+
+  linux:
+    name: Linux (VST3, tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libxext-dev libxi-dev libfreetype-dev libfontconfig1-dev \
+            libgl1-mesa-dev xvfb
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: pluginval
+        run: CONFIG=RelWithDebInfo xvfb-run -a scripts/pluginval.sh build 10
+      - name: Render demos
+        run: CONFIG=RelWithDebInfo scripts/render_demos.sh build renders
+
+  sanitizers:
+    name: Core tests (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DFOUNDRY_BUILD_PLUGIN=OFF -DFOUNDRY_BUILD_TOOLS=OFF -DFOUNDRY_SANITIZERS=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure

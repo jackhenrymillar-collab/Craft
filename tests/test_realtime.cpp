@@ -1,0 +1,72 @@
+// Verifies the audio path never allocates, by counting global operator new calls.
+#include "test_helpers.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <atomic>
+#include <cstdlib>
+#include <new>
+
+#if defined(__SANITIZE_ADDRESS__)
+ #define FOUNDRY_ASAN 1
+#elif defined(__has_feature)
+ #if __has_feature(address_sanitizer)
+  #define FOUNDRY_ASAN 1
+ #endif
+#endif
+
+// ASan replaces operator new itself, so the counting allocator is skipped in sanitizer builds.
+#ifndef FOUNDRY_ASAN
+namespace
+{
+std::atomic<bool> counting { false };
+std::atomic<long> allocations { 0 };
+}
+
+void* operator new (std::size_t size)
+{
+    if (counting.load (std::memory_order_relaxed))
+        allocations.fetch_add (1, std::memory_order_relaxed);
+    if (void* p = std::malloc (size == 0 ? 1 : size))
+        return p;
+    throw std::bad_alloc();
+}
+void* operator new[] (std::size_t size) { return operator new (size); }
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
+#endif
+
+using namespace foundry;
+
+TEST_CASE ("The audio path does not allocate", "[realtime]")
+{
+#ifdef FOUNDRY_ASAN
+    SKIP ("allocation counting is disabled under AddressSanitizer");
+#else
+    auto spec = test::defaultSpec();
+    auto a = compileInstrument (spec, 48000.0);
+    spec.treatments.age.amount = 0.8;
+    spec.treatments.puncture.count = 0.5;
+    auto b = compileInstrument (spec, 48000.0);
+
+    PadVoice v;
+    v.prepare (48000.0);
+    v.setInstrument (a.get());
+    float l[128] {}, r[128] {};
+
+    allocations = 0;
+    counting = true;
+    for (int i = 0; i < 400; ++i)
+    {
+        if (i % 50 == 0) v.trigger (0.9);
+        if (i == 120) v.setInstrument (b.get());
+        if (i == 300) v.triggerAt (0.5, 0.9, 1.0);
+        v.process (l, r, 128);
+        (void) v.takeRetired();
+    }
+    counting = false;
+    CHECK (allocations.load() == 0);
+#endif
+}

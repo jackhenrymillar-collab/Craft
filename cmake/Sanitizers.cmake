@@ -1,0 +1,6 @@
+function(foundry_enable_sanitizers target)
+    if(FOUNDRY_SANITIZERS AND NOT MSVC)
+        target_compile_options(${target} PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PUBLIC -fsanitize=address,undefined)
+    endif()
+endfunction()
