@@ -1,5 +1,7 @@
 #include "test_helpers.h"
 
+#include "compile/MembraneSolver.h"
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -46,8 +48,8 @@ TEST_CASE ("Fundamental decay matches the material loss factor", "[voice][decay]
     const double measuredSigma = std::log (a1 / a2) / 1.0;
     const double t60Measured = std::log (1000.0) / measuredSigma;
 
-    const auto& mat = getMaterial (spec.membrane.material);
-    const double expectedT60 = std::log (1000.0) / materialDecayRate (ci->omega[0], mat.lossFactor, spec.membrane.highFreqDamping);
+    const auto& mat = getMaterial (spec.part.material);
+    const double expectedT60 = std::log (1000.0) / materialDecayRate (ci->omega[0], mat.lossFactor, spec.part.highFreqDamping);
     INFO ("f0 " << f0 << " Hz, T60 measured " << t60Measured << " s, expected " << expectedT60 << " s");
     CHECK (t60Measured == Approx (expectedT60).epsilon (0.03));
 }
@@ -66,9 +68,9 @@ TEST_CASE ("A freely ringing pad loses energy monotonically", "[voice][energy]")
 
     float l[64] {}, rr[64] {};
     // Let the contact finish.
-    for (int i = 0; i < 200 && v.mallet().isActive(); ++i)
+    for (int i = 0; i < 200 && v.striker().isActive(); ++i)
         v.process (l, rr, 64);
-    REQUIRE_FALSE (v.mallet().isActive());
+    REQUIRE_FALSE (v.striker().isActive());
 
     double prev = v.energy();
     REQUIRE (prev > 0.0);
@@ -99,16 +101,19 @@ TEST_CASE ("The mallet obeys the Hertz contact law against a rigid surface", "[v
         for (double v0 : { 0.5, 3.0 })
         {
             const double shape[1] = { 1.0 };
-            HertzMallet m;
+            Striker m;
             const double mass = 0.012;
-            m.start (bank, shape, v0, { hardness, mass });
+            Striker::Model model;
+            model.law = Striker::lawFor (hardness);
+            model.mass = mass;
+            m.start (bank, shape, v0, model);
             int steps = 0;
             while (m.isActive() && steps < 100000) { m.process (bank, dt); ++steps; }
             const double measured = m.contactSamples() * dt;
 
             // Undamped power law F = K d^a: d_max from energy, t = 2 d_max / v * I(a),
             // I(a) = integral_0^1 du / sqrt(1 - u^(a+1)).
-            const auto law = HertzMallet::lawFor (hardness);
+            const auto law = Striker::lawFor (hardness);
             const double dMax = std::pow (0.5 * mass * v0 * v0 * (law.alpha + 1.0) / law.K, 1.0 / (law.alpha + 1.0));
             double I = 0.0;
             const int N = 200000;
@@ -138,10 +143,10 @@ TEST_CASE ("Contact on a head lasts a few ms, softer is longer", "[voice][mallet
         v.trigger (0.8);
         float l[1] {}, r[1] {};
         int contact = 0;
-        for (int i = 0; i < 4800 && v.mallet().isActive(); ++i)
+        for (int i = 0; i < 4800 && v.striker().isActive(); ++i)
         {
             v.process (l, r, 1);
-            contact = v.mallet().contactSamples();
+            contact = v.striker().contactSamples();
         }
         return 1000.0 * contact / 48000.0;
     };
@@ -277,7 +282,7 @@ TEST_CASE ("Hitting the centre excites only axisymmetric modes", "[voice]")
     for (int i = 0; i < 40; ++i)
         v.process (l, r, 256);
     for (int k = 0; k < ci->nExact; ++k)
-        if (ci->basis->mode (k).m != 0)
+        if (static_cast<const MembraneBasis&> (*ci->basis).mode (k).m != 0)
             CHECK (std::abs (v.bank().q[(size_t) k]) < 1e-12);
 }
 

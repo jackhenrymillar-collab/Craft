@@ -31,15 +31,22 @@ include(Dependencies)
 add_library(foundry_core STATIC
     source/model/Materials.cpp
     source/model/Treatments.cpp
+    source/model/PartCatalogue.cpp
     source/compile/Bessel.cpp
+    source/compile/BeamFunctions.cpp
     source/compile/LinearAlgebra.cpp
+    source/compile/ModalBasis.cpp
     source/compile/MembraneSolver.cpp
+    source/compile/StripSolver.cpp
+    source/compile/PlateSolver.cpp
+    source/compile/ShellSolver.cpp
     source/compile/TreatmentSolver.cpp
     source/compile/CompiledInstrument.cpp
     source/compile/InstrumentExchange.cpp
     source/compile/CompileWorker.cpp
     source/dsp/ModalBank.cpp
-    source/dsp/HertzMallet.cpp
+    source/dsp/Striker.cpp
+    source/dsp/Calibrate.cpp
     source/dsp/PadVoice.cpp
 )
 target_include_directories(foundry_core PUBLIC source)

@@ -31,11 +31,12 @@ struct Rng
 
 double lerp (double a, double b, double t) { return a + (b - a) * t; }
 
-Vec2 randomPointInDisc (Rng& rng, double radius)
+// A random interior point (two uniforms, so layouts stay put when other settings change).
+Vec2 randomInteriorPoint (Rng& rng, const ModalBasis& basis, double margin)
 {
-    const double r = radius * std::sqrt (rng.uniform());
-    const double t = rng.range (0.0, 2.0 * kPi);
-    return { r * std::cos (t), r * std::sin (t) };
+    const double u1 = rng.uniform();
+    const double u2 = rng.uniform();
+    return basis.interiorPoint (u1, u2, margin);
 }
 
 // Smooth random scalar field as a sum of plane waves (zero mean, unit-ish RMS).
@@ -98,7 +99,7 @@ public:
             basis.addStiffness (phi.data(), gx.data(), gy.data(), weight * c.loss, 1.0, {}, D.data());
         if (c.fMass != 0.0)
         {
-            const double w = weight * c.fMass * basis.massPerArea();
+            const double w = weight * c.fMass * basis.massPerAreaAt (p);
             for (int i = 0; i < n; ++i)
             {
                 const double a = w * phi[(size_t) i];
@@ -176,7 +177,8 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
 
     const ModalBasis& basis = *ctx.basis;
     const int n = basis.size();
-    const double a = basis.characteristicSize();
+    const double a = basis.characteristicSize();   // equivalent radius
+    const double narrow = basis.minHalfExtent();    // features must fit across thin parts
 
     TreatedModes out;
     out.n = n;
@@ -196,8 +198,8 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
         Rng pitRng (t.seed ^ 0xB175u);
         for (int i = 0; i < pits; ++i)
         {
-            const Vec2 c = randomPointInDisc (pitRng, 0.95 * a);
-            const double r = a * pitRng.range (0.012, 0.045);
+            const Vec2 c = randomInteriorPoint (pitRng, basis, 0.95);
+            const double r = std::min (a * pitRng.range (0.012, 0.045), 0.4 * narrow);
             const double depth = pitDepth * pitRng.range (0.5, 1.0);
             as.addDisc (c, r, [&] (double u) {
                 const double g = 1.0 - u * u;
@@ -215,17 +217,19 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
         Rng crackRng (t.seed ^ 0xC4AC4u);
         for (int i = 0; i < cracks; ++i)
         {
-            // Cracks tend to start at the rim and run inwards.
-            const double ang = crackRng.range (0.0, 2.0 * kPi);
+            // Cracks tend to start at the edge and run inwards.
+            const double edgeU = crackRng.uniform();
             const double len = a * crackRng.range (0.15, 0.6);
             const double bend = crackRng.range (-0.6, 0.6);
-            Vec2 p { 0.97 * a * std::cos (ang), 0.97 * a * std::sin (ang) };
-            double dir = ang + kPi + crackRng.range (-0.4, 0.4);
+            Vec2 p;
+            double inward = 0.0;
+            basis.edgePoint (edgeU, p, inward);
+            double dir = inward + crackRng.range (-0.4, 0.4);
             const int steps = 8;
             const double step = len / steps;
             for (int s = 0; s < steps; ++s)
             {
-                as.addDisc (p, 0.03 * a, [&] (double u) {
+                as.addDisc (p, std::min (0.03 * a, 0.3 * narrow), [&] (double u) {
                     LocalChange lc;
                     lc.fIso = -0.7 * A * (1.0 - u);
                     lc.loss = friction * (1.0 - u * u);
@@ -246,7 +250,7 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
             const double tw = t.twist.amount;
             Rng twRng (t.seed ^ 0x7715Fu);
             const double pivotAngle = twRng.range (0.0, 2.0 * kPi);
-            const Vec2 pivot { t.twist.pivot * 0.65 * a * std::cos (pivotAngle), t.twist.pivot * 0.65 * a * std::sin (pivotAngle) };
+            const Vec2 pivot = basis.place (t.twist.pivot * 0.65, pivotAngle);
             const double r0 = a * lerp (0.9, 0.08, t.twist.focus);
             WaveField wrinkle (twRng, 5, 0.08 * a, 0.2 * a);
             const double wr = t.twist.wrinkle * std::abs (tw);
@@ -294,11 +298,11 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
         Rng rng (t.seed ^ 0xDE70u);
         constexpr int maxDents = 48;
         const int count = 1 + (int) std::lround (t.deform.density * t.deform.density * (maxDents - 1));
-        const double baseR = a * lerp (0.03, 0.4, t.deform.size);
+        const double baseR = std::min (a * lerp (0.03, 0.4, t.deform.size), 1.2 * narrow);
         for (int i = 0; i < maxDents; ++i)
         {
             // Always draw the same random numbers so positions don't reshuffle with density.
-            const Vec2 c = randomPointInDisc (rng, 0.92 * a);
+            const Vec2 c = randomInteriorPoint (rng, basis, 0.92);
             const double r = baseR * rng.range (0.6, 1.4);
             const double depth = t.deform.intensity * rng.range (0.5, 1.0);
             const double sign = rng.uniform() < 0.75 ? 1.0 : -1.0; // mostly dents, a few bumps
@@ -322,14 +326,14 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
     {
         Rng rng (t.seed ^ 0x9D1Cu);
         const int count = (int) std::lround (t.puncture.count * kMaxPunctures);
-        const double ringR = a * lerp (0.05, 0.85, t.puncture.placement);
-        const double holeR = a * lerp (0.006, 0.1, std::pow (t.puncture.size, 1.5));
+        const double ringR = lerp (0.05, 0.85, t.puncture.placement);
+        const double holeR = std::min (a * lerp (0.006, 0.1, std::pow (t.puncture.size, 1.5)), 0.6 * narrow);
         const double ringPhase = rng.range (0.0, 2.0 * kPi);
         for (int i = 0; i < kMaxPunctures; ++i)
         {
             const double ang = ringPhase + 2.0 * kPi * i / std::max (1, count);
-            const Vec2 ring { ringR * std::cos (ang), ringR * std::sin (ang) };
-            const Vec2 rnd = randomPointInDisc (rng, 0.9 * a);
+            const Vec2 ring = basis.place (ringR, ang);
+            const Vec2 rnd = randomInteriorPoint (rng, basis, 0.9);
             const double sizeJitter = rng.range (0.7, 1.3);
             if (i >= count)
                 continue;
@@ -397,7 +401,22 @@ TreatedModes solveTreatments (const TreatmentContext& ctx, const Treatments& tIn
         const double base = basis.omega (k);
         const double w = transformed ? std::sqrt (std::max (lambda[(size_t) k], 0.01 * basis.omega (0) * basis.omega (0)))
                                      : base;
-        double sigma = materialDecayRate (w, ctx.lossFactor, ctx.highFreqDamping);
+        // Material loss (scaled by how much of the mode lives in the material, not in air)
+        // plus any per-mode extra loss (mounts, air columns), mixed by participation.
+        double lossWeight = basis.materialLossWeight (k), extra = basis.extraDecay (k);
+        if (transformed)
+        {
+            lossWeight = extra = 0.0;
+            for (int i = 0; i < n; ++i)
+            {
+                const double part = out.X[(size_t) (i * n + k)] * out.Xinv[(size_t) (k * n + i)];
+                lossWeight += part * basis.materialLossWeight (i);
+                extra += part * basis.extraDecay (i);
+            }
+            lossWeight = std::clamp (lossWeight, 0.0, 1.0);
+            extra = std::max (0.0, extra);
+        }
+        double sigma = lossWeight * materialDecayRate (w, ctx.lossFactor, ctx.highFreqDamping) + extra;
         if (transformed)
         {
             // Extra loss from local features: strain-energy fraction method.
