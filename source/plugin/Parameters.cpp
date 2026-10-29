@@ -20,7 +20,7 @@ bool affectsModes (const juce::String& p)
 {
     return p == id::tune || p.startsWith ("p1_shape") || p.startsWith ("p1_age") || p.startsWith ("p1_deform") || p.startsWith ("p1_twist")
         || p.startsWith ("p1_puncture") || p == id::looseAmount || p == id::jointStiffness || p == id::attachSize
-        || p == id::attachPlace;
+        || p == id::attachPlace || p == id::shellDepth || p == id::shellPort;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
@@ -119,7 +119,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
             return juce::String (juce::roundToInt (v * 100.0f)) + "%";
         })));
 
-    layout.add (std::move (pad), std::move (shape), std::move (treat), std::move (addOns));
+    auto low = std::make_unique<juce::AudioProcessorParameterGroup> ("low1", "Pad 1 Low End", " | ");
+    low->addChild (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::shellDepth, 1 }, "Shell Depth", juce::NormalisableRange<float> (0.15f, 0.6f), 0.4f,
+        juce::AudioParameterFloatAttributes().withLabel ("cm").withStringFromValueFunction (
+            [] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + " cm"; })));
+    low->addChild (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::shellPort, 1 }, "Port", juce::NormalisableRange<float> (0.0f, 1.0f), 0.3f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) {
+            if (v < 0.01f) return juce::String ("Sealed");
+            return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+        })));
+    low->addChild (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { id::pitchDrop, 1 }, "Pitch Drop", juce::NormalisableRange<float> (0.0f, 1.0f), 0.25f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) {
+            if (v < 0.005f) return juce::String ("Off");
+            if (std::abs (v - 0.25f) < 0.02f) return juce::String ("Natural");
+            return juce::String (juce::roundToInt (v * 100.0f)) + "%";
+        })));
+
+    layout.add (std::move (pad), std::move (shape), std::move (treat), std::move (addOns), std::move (low));
     return layout;
 }
 

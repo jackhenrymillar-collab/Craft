@@ -180,10 +180,14 @@ KitView::KitView (FoundryProcessor& p) : proc (p), part (p)
             const auto& c = partInfo (proc.getPartType()).controls[(size_t) i];
             const double v = c.value (u) * c.display;
             const int decimals = std::abs (v) < 10.0 && c.unit != "%" ? 1 : 0;
-            return juce::String (v, decimals) + (c.unit.empty() ? "" : " " + str (c.unit));
+            return (decimals > 0 ? juce::String (v, decimals) : juce::String (juce::roundToInt (v))) + (c.unit.empty() ? "" : " " + str (c.unit));
         };
         addAndMakeVisible (k);
     }
+    shellKnobs.add (new Knob (s, pid::shellDepth, "Depth", "Kick shell depth: more air inside is a softer spring, a deeper boom"));
+    shellKnobs.add (new Knob (s, pid::shellPort, "Port", "Hole in the front head: sealed (long boom) to wide open (short, punchy)"));
+    for (auto* k : shellKnobs)
+        addChildComponent (k);
     // Add-ons.
     attachBox.addItem ("Nothing joined", 1);
     for (int t = 0; t < kNumPartTypes; ++t)
@@ -236,7 +240,8 @@ KitView::KitView (FoundryProcessor& p) : proc (p), part (p)
         const auto t = proc.getAttachPart().value_or (PartType::Box);
         const auto& c = partInfo (t).controls[0];
         const double v = c.value (u) * c.display;
-        return juce::String (v, std::abs (v) < 10.0 && c.unit != "%" ? 1 : 0) + (c.unit.empty() ? "" : " " + str (c.unit));
+        const bool decimal = std::abs (v) < 10.0 && c.unit != "%";
+        return (decimal ? juce::String (v, 1) : juce::String (juce::roundToInt (v))) + (c.unit.empty() ? "" : " " + str (c.unit));
     };
     rattleKnobs.add (new Knob (s, pid::rattle, "Rattle", "Snare wires / rivets: pressed tight to hanging loose"));
     rattleKnobs.add (new Knob (s, pid::looseAmount, "Amount", "How much rice, how many beads"));
@@ -283,6 +288,7 @@ KitView::KitView (FoundryProcessor& p) : proc (p), part (p)
         { pid::tune, "Size/Tune", "Scales the whole object" },
         { pid::airMix, "Air mix", "Contact mic (on the part) to air mic (in the room)" },
         { pid::micDistance, "Mic dist", "How far the air mic is from the part" },
+        { pid::pitchDrop, "Pitch drop", "Drum heads: a hard hit stretches the head, so the pitch starts high and falls. Natural at 25%" },
         { pid::level, "Level", "" },
         { pid::pan, "Pan", "" },
     };
@@ -322,6 +328,8 @@ void KitView::refreshRecipe()
         b->setButtonText (str (info.mounts[(size_t) m]));
         b->setToggleState (m == now.mount, juce::dontSendNotification);
     }
+    for (auto* k : shellKnobs)
+        k->setVisible (now.part == PartType::Membrane && now.mount == 1);
     if (partChanged)
         for (int i = 0; i < shapeKnobs.size(); ++i)
         {
@@ -519,6 +527,14 @@ void KitView::resized()
     for (auto* k : shapeKnobs)
         k->setBounds (knobs.removeFromTop (kh).reduced (2, 2));
     rec.removeFromRight (6);
+    if (shellKnobs[0]->isVisible())
+    {
+        auto col = rec.removeFromRight (84);
+        const int sh = juce::jmin (kh, col.getHeight() / shellKnobs.size());
+        for (auto* k : shellKnobs)
+            k->setBounds (col.removeFromTop (sh).reduced (2, 2));
+        rec.removeFromRight (6);
+    }
     part.setBounds (rec);
 
     auto t = treatArea.reduced (8, 0).withTrimmedTop (24);

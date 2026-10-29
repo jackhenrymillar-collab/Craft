@@ -25,10 +25,10 @@ const char* kHelp = R"(render_cli: render Foundry hits offline and analyse them.
   --at R,THETA          strike at a fixed point (0 centre..1 edge, radians) instead of Position/Spread
   --part NAME           Membrane | Bar | Plate | Shell (Bowl, Bell) | Tube | Spring | Box (Membrane)
   --material NAME       any material the part allows (default: the part's own)
-  --mount N|NAME        0/1 or the mount's name (On cords, Clamped, Hung, Framed, Resting, ...)
+  --mount N|NAME        0/1 or the mount's name (Hoop, Kick shell, On cords, Clamped, Hung, ...)
   --shape-a/-b/-c U     the part's three shape controls, normalised 0..1 (default: the part's)
   --profile U           shorthand for --shape-b on a Shell (0 bowl .. 1 bell)
-  --striker NAME        Mallet | Hammer | Hand | Drop | Brush | Scrape (Mallet)
+  --striker NAME        Mallet | Hammer | Hand | Drop | Brush | Scrape | Beater (Mallet)
   --attach NAME         join a second part (any part name) to the main one
   --attach-material M   its material (default: that part's own)
   --attach-size U       its first shape control, normalised 0..1 (default: the part's)
@@ -37,6 +37,9 @@ const char* kHelp = R"(render_cli: render Foundry hits offline and analyse them.
   --attach-place U      where on the main part, 0 centre .. 1 edge (0.6)
   --rattles NAME        None | Snare | Sizzle (None)
   --rattle U            0 tight .. 1 loose (0.5)
+  --shell-depth M       kick shell depth in metres (0.4)
+  --port U              kick front-head port, 0 sealed .. 1 wide (0.3)
+  --pitch-drop U        0 off, 0.25 natural, 1 big glide after hard hits (0)
   --loose NAME          None | Rice | Beads | Sand | Chain (None)
   --loose-amount U      how many, 0..1 (0.5)
   --oversample          run the modes at 2x the sample rate
@@ -111,6 +114,8 @@ int main (int argc, char** argv)
             return 1;
         }
     }
+    spec.part.shellDepth = std::clamp (opt ("--shell-depth", spec.part.shellDepth), 0.1, 0.8);
+    spec.part.shellPort = std::clamp (opt ("--port", spec.part.shellPort), 0.0, 1.0);
     const char* shapeOpts[] = { "--shape-a", "--shape-b", "--shape-c" };
     for (int i = 0; i < 3; ++i)
         spec.part.shape[(size_t) i] = std::clamp (opt (shapeOpts[i], spec.part.shape[(size_t) i]), 0.0, 1.0);
@@ -164,6 +169,7 @@ int main (int argc, char** argv)
     pp.airMix = std::clamp (opt ("--air-mix", 0.0), 0.0, 1.0);
     pp.micDistance = std::clamp (opt ("--mic-distance", 0.5), 0.1, 3.0);
     pp.rattle = std::clamp (opt ("--rattle", 0.5), 0.0, 1.0);
+    pp.pitchDrop = std::clamp (opt ("--pitch-drop", 0.0), 0.0, 1.0);
     pp.level = 1.0;
 
     std::vector<Hit> hits;

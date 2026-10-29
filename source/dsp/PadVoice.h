@@ -23,6 +23,7 @@ struct PadParams
     double airMix = 0.0;         // 0 contact mic .. 1 air mic
     double micDistance = 0.5;    // air mic distance, m
     double rattle = 0.5;         // 0 tight (snare pressed hard, rivets seated) .. 1 loose
+    double pitchDrop = 0.0;      // 0 off, 0.25 a real head, 1 a big glide after a hard hit (membranes)
 };
 
 // One pad: an instrument's ringing modes, a striker and two pickups (contact + air mic).
@@ -63,6 +64,8 @@ public:
     [[nodiscard]] const ModalBank& bank() const noexcept { return active; }
     [[nodiscard]] const Striker& striker() const noexcept { return hitter; }
     [[nodiscard]] bool isAsleep() const noexcept { return asleep; }
+    // Current tension-modulation pitch ratio (1 = no glide).
+    [[nodiscard]] double pitchRatio() const noexcept { return glideActive ? glideRatio : 1.0; }
     [[nodiscard]] bool isSweeping() const noexcept { return sweep.active; }
     // Rattles and loose objects: positions (m, down = +) and how many are touching the part.
     [[nodiscard]] double contactPosition (int j) const noexcept { return elemY[(size_t) j]; }
@@ -121,6 +124,15 @@ private:
         double noiseLp = 0.0, noiseHp = 0.0, pulse = 0.0;
     } sweep;
     std::array<double, kMaxModes> sweepA {}, sweepB {};
+
+    // Tension modulation: an extra phase advance per mode, refreshed every kGlideBlock samples.
+    static constexpr int kGlideBlock = 16;
+    void updateGlide() noexcept;
+    void applyGlide() noexcept;
+    std::array<double, kMaxModes> glideCos {}, glideSinOverW {}, glideSinW {};
+    int glideCountdown = 0;
+    bool glideActive = false;
+    double glideRatio = 1.0;
 
     // 2x oversampling: decimation low-pass (two biquads).
     struct Biquad { double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;

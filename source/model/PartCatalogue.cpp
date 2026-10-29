@@ -12,7 +12,7 @@ constexpr std::array<PartInfo, kNumPartTypes> kParts {{
     { "Membrane", {{ { "Diameter",  "cm",  0.20,   0.66,   0.356,  true,  100.0 },
                      { "Tension",   "N/m", 500.0,  6000.0, 2000.0, true,  1.0 },
                      { "Muffle",    "%",   0.0,    1.0,    0.0,    false, 100.0 } }},
-      { "Tensioned", "" }, 1, MaterialId::Mylar, true },
+      { "Hoop", "Kick shell" }, 2, MaterialId::Mylar, true },
     { "Bar",      {{ { "Length",    "cm",  0.12,   1.0,    0.40,   true,  100.0 },
                      { "Thickness", "mm",  0.004,  0.04,   0.02,   true,  1000.0 },
                      { "Undercut",  "%",   0.0,    1.0,    0.5,    false, 100.0 } }},
@@ -46,6 +46,7 @@ constexpr std::array<StrikerInfo, kNumStrikerTypes> kStrikers {{
     { "Drop", "Rubber ball", "Steel ball" },
     { "Brush", "Soft brush", "Stiff wire brush" },
     { "Scrape", "Smooth stick", "Ridged rod" },
+    { "Beater", "Felt kick beater", "Plastic beater" },
 }};
 
 constexpr std::array<NamedInfo, kNumJointTypes> kJoints {{

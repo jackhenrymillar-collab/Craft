@@ -22,6 +22,10 @@ struct PartSpec
     std::array<double, 3> shape { 0.5, 0.5, 0.5 };
     int mount = 0;                // index into PartInfo::mounts
     double highFreqDamping = 0.2; // extra loss per kHz (1 + h * f/1kHz)
+    // Kick shell (Membrane mount 1): shell depth in metres, and the front head's port as
+    // 0 (sealed) .. 1 (a hole nearly half the head's radius).
+    double shellDepth = 0.4;
+    double shellPort = 0.3;
 
     [[nodiscard]] double control (int i) const noexcept
     {

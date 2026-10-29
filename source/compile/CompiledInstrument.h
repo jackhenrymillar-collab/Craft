@@ -76,6 +76,12 @@ struct CompiledInstrument
     // move a heavy bar). Set by the calibration.
     double sweepGain = 1.0;
 
+    // Tension modulation (membranes): a big swing stretches the head and raises its tension,
+    // so a hard hit starts sharp and falls back in pitch as it dies away. The tension rises
+    // by dT/T0 = pitchCoupling * sum_k (omega_k q_k)^2 over the exact modes (Kirchhoff-Carrier,
+    // with the head's in-plane stiffness). Zero for parts that don't glide.
+    double pitchCoupling = 0.0;
+
     double grit = 0.0;
     std::vector<TreatmentFeature> features;
     InstrumentSpec spec;                         // the spec it was built from (material resolved)

@@ -108,6 +108,14 @@ Striker::Model Striker::modelFor (const StrikerParams& p) noexcept
             m.mass = 0.008;
             m.tipRadius = 0.004;
             break;
+        case StrikerType::Beater:
+            // A kick pedal's beater: a broad felt ball (soft, very non-linear, lossy) .. a hard
+            // plastic face. The pedal and beater act like 60 g at the head.
+            m.law = power (2.2 - 0.6 * h, 40.0 * std::pow (50.0, h), 0.4 - 0.3 * h);
+            m.mass = 0.06;
+            m.tipRadius = 0.035 - 0.015 * h;
+            m.maxTime = 0.15;
+            break;
         case StrikerType::Count: break;
     }
     // Heavy strikers swing slower for the same Force: momentum grows only as mass^0.55, so a

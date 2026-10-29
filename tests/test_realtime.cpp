@@ -131,6 +131,9 @@ TEST_CASE ("Joints, rattles, loose objects, sweeps and oversampling play without
         s.attach.joint = JointType::Rubber;
         s.loose.type = LooseType::Beads;
         ins.push_back (compileInstrument (s, 48000.0));
+        auto kick = test::defaultSpec();
+        kick.part.mount = 1; // kick shell: pitch drop on
+        ins.push_back (compileInstrument (kick, 48000.0));
     }
     PadVoice v;
     v.prepare (48000.0);
@@ -144,6 +147,7 @@ TEST_CASE ("Joints, rattles, loose objects, sweeps and oversampling play without
         PadParams p;
         p.striker = (StrikerType) ((i / 20) % kNumStrikerTypes);
         p.rattle = 0.01 * (i % 100);
+        p.pitchDrop = 0.01 * ((i * 7) % 100);
         p.airMix = 0.5;
         v.setParams (p);
         if (i % 20 == 0) v.trigger (0.9);

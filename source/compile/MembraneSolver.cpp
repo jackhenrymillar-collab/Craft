@@ -1,8 +1,10 @@
 #include "MembraneSolver.h"
 
 #include "Bessel.h"
+#include "LinearAlgebra.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <mutex>
@@ -251,6 +253,194 @@ void MembraneBasis::addStiffness (const double* phi, const double* gx, const dou
         double* row = K + (size_t) i * (size_t) n;
         for (int j = i; j < n; ++j)
             row[j] += ax * gx[j] + ay * gy[j];
+    }
+}
+
+void MembraneBasis::radiation (std::vector<double>& volume, std::vector<double>& dx, std::vector<double>& dy) const
+{
+    // integral of J0(j rho) rho = J1(j) / j; integral of rho^2 J1(j rho) = J2(j) / j.
+    const int nm = size();
+    const double a = params.radius;
+    volume.assign ((size_t) nm, 0.0);
+    dx.assign ((size_t) nm, 0.0);
+    dy.assign ((size_t) nm, 0.0);
+    for (int k = 0; k < nm; ++k)
+    {
+        const auto& md = modes[(size_t) k];
+        if (md.m == 0)
+            volume[(size_t) k] = md.norm * 2.0 * std::numbers::pi * a * a * bessel::J (1, md.zero) / md.zero;
+        else if (md.m == 1)
+            (md.isSine ? dy : dx)[(size_t) k] = md.norm * std::numbers::pi * a * a * a * bessel::J (2, md.zero) / md.zero;
+    }
+}
+
+// ---- Drum with a shell --------------------------------------------------------------------
+
+namespace
+{
+constexpr double kAirDensity = 1.2;
+constexpr double kSoundSpeed = 343.0;
+}
+
+DrumShellBasis::DrumShellBasis (const Params& p) : params (p)
+{
+    auto bp = p.batter;
+    bp.maxModes = std::max (1, std::min (bp.maxModes, kMaxExactModes) - p.frontModes - 1);
+    batter = std::make_shared<MembraneBasis> (bp);
+    nb = batter->size();
+    batter->radiation (batterVolume, batterDx, batterDy);
+
+    // Front head: same size and skin, a little slacker. Only its m = 0 modes move air.
+    auto fp = p.batter;
+    fp.tension *= p.frontTension;
+    fp.maxModes = kMaxExactModes;
+    MembraneBasis front (fp);
+    std::vector<double> fv, fdx, fdy;
+    front.radiation (fv, fdx, fdy);
+    std::vector<double> frontOmega;
+    for (int k = 0; k < front.size() && (int) frontOmega.size() < p.frontModes; ++k)
+        if (front.mode (k).m == 0)
+        {
+            frontOmega.push_back (front.omega (k));
+            frontVolume.push_back (fv[(size_t) k]);
+        }
+    nr = (int) frontOmega.size();
+
+    const double a = p.batter.radius;
+    const double V = std::numbers::pi * a * a * std::max (0.02, p.depth);
+    const double airK = kAirDensity * kSoundSpeed * kSoundSpeed / V;
+    hasPort = p.portRadius > 1e-4;
+    n = nb + nr + (hasPort ? 1 : 0);
+
+    g.assign ((size_t) n, 0.0);
+    for (int k = 0; k < nb; ++k) g[(size_t) k] = batterVolume[(size_t) k];
+    for (int k = 0; k < nr; ++k) g[(size_t) (nb + k)] = frontVolume[(size_t) k];
+    if (hasPort)
+    {
+        const double S = std::numbers::pi * p.portRadius * p.portRadius;
+        const double Leff = 0.0005 + 1.7 * p.portRadius; // a hole in a thin head, flanged both sides
+        const double portMass = kAirDensity * S * Leff;
+        // Positive port coordinate = air leaving the shell, which relieves the pressure.
+        g[(size_t) (nb + nr)] = -S / std::sqrt (portMass);
+        helmholtz = kSoundSpeed / (2.0 * std::numbers::pi) * std::sqrt (S / (V * Leff));
+    }
+
+    std::vector<double> K ((size_t) n * (size_t) n, 0.0), M ((size_t) n * (size_t) n, 0.0);
+    // The outside air moves with each head (an unflanged piston's end correction, 0.61 a), which
+    // weighs a light kick head down about as much as the head itself.
+    const double S = std::numbers::pi * a * a;
+    const double headAir = kAirDensity * 0.61 * a / S;
+    for (int i = 0; i < n; ++i)
+    {
+        const double w = i < nb ? batter->omega (i) : (i < nb + nr ? frontOmega[(size_t) (i - nb)] : 0.0);
+        K[(size_t) i * (size_t) n + (size_t) i] = w * w;
+        M[(size_t) i * (size_t) n + (size_t) i] = 1.0;
+        if (g[(size_t) i] == 0.0)
+            continue;
+        for (int j = 0; j < n; ++j)
+        {
+            K[(size_t) i * (size_t) n + (size_t) j] += airK * g[(size_t) i] * g[(size_t) j];
+            const bool sameHead = (i < nb && j < nb) || (i >= nb && i < nb + nr && j >= nb && j < nb + nr);
+            if (sameHead)
+                M[(size_t) i * (size_t) n + (size_t) j] += headAir * g[(size_t) i] * g[(size_t) j];
+        }
+    }
+    std::vector<double> lambda;
+    if (! linalg::generalisedEigen (K, M, n, lambda, X))
+        linalg::symmetricEigen (K, n, lambda, X);
+
+    omegas.resize ((size_t) n);
+    portShare.assign ((size_t) n, 0.0);
+    extra.assign ((size_t) n, 0.0);
+    netVolume.assign ((size_t) n, 0.0);
+    for (int k = 0; k < n; ++k)
+    {
+        const double w = std::sqrt (std::max (lambda[(size_t) k], 1.0));
+        omegas[(size_t) k] = w;
+        // The drum breathes: its net outward flow is minus the change in the air inside.
+        double U = 0.0;
+        for (int i = 0; i < n; ++i)
+            U -= g[(size_t) i] * X[(size_t) i * (size_t) n + (size_t) k];
+        netVolume[(size_t) k] = U;
+        // Radiation loss of that flow (a small monopole, rolling off once ka passes 1).
+        const double ka = w / kSoundSpeed * a;
+        extra[(size_t) k] = std::min (0.5 * w, kAirDensity * w * w * U * U / (8.0 * std::numbers::pi * kSoundSpeed) / (1.0 + ka * ka));
+        if (hasPort)
+        {
+            const double x = X[(size_t) (nb + nr) * (size_t) n + (size_t) k];
+            portShare[(size_t) k] = x * x;
+            extra[(size_t) k] += x * x * w / (2.0 * p.portQ);
+        }
+    }
+}
+
+void DrumShellBasis::shapes (Vec2 p, double* phi) const noexcept
+{
+    std::array<double, kMaxExactModes> f {};
+    batter->shapes (p, f.data());
+    for (int k = 0; k < n; ++k)
+        phi[k] = 0.0;
+    for (int i = 0; i < nb; ++i)
+    {
+        const double fi = f[(size_t) i];
+        if (fi == 0.0) continue;
+        const double* row = X.data() + (size_t) i * (size_t) n;
+        for (int k = 0; k < n; ++k)
+            phi[k] += fi * row[k];
+    }
+}
+
+void DrumShellBasis::shapesAndGradients (Vec2 p, double* phi, double* gx, double* gy) const noexcept
+{
+    std::array<double, kMaxExactModes> f {}, fx {}, fy {};
+    batter->shapesAndGradients (p, f.data(), fx.data(), fy.data());
+    for (int k = 0; k < n; ++k)
+        phi[k] = gx[k] = gy[k] = 0.0;
+    for (int i = 0; i < nb; ++i)
+    {
+        const double* row = X.data() + (size_t) i * (size_t) n;
+        const double fi = f[(size_t) i], fxi = fx[(size_t) i], fyi = fy[(size_t) i];
+        for (int k = 0; k < n; ++k)
+        {
+            phi[k] += fi * row[k];
+            gx[k] += fxi * row[k];
+            gy[k] += fyi * row[k];
+        }
+    }
+}
+
+void DrumShellBasis::addStiffness (const double*, const double* gx, const double* gy,
+                                   double weight, double fIso, Sym2 S, double* K) const noexcept
+{
+    // Treatments act on the batter head: the same tension kernel as a bare membrane, over the
+    // coupled modes' gradients on the batter.
+    const double T = batter->referenceTension() * weight;
+    for (int i = 0; i < n; ++i)
+    {
+        const double ax = T * ((fIso + S.xx) * gx[i] + S.xy * gy[i]);
+        const double ay = T * (S.xy * gx[i] + (fIso + S.yy) * gy[i]);
+        double* row = K + (size_t) i * (size_t) n;
+        for (int j = i; j < n; ++j)
+            row[j] += ax * gx[j] + ay * gy[j];
+    }
+}
+
+void DrumShellBasis::radiation (std::vector<double>& volume, std::vector<double>& dx, std::vector<double>& dy) const
+{
+    // The net flow of the whole drum (both heads and the port), plus the batter's dipoles.
+    volume = netVolume;
+    dx.assign ((size_t) n, 0.0);
+    dy.assign ((size_t) n, 0.0);
+    for (int i = 0; i < nb; ++i)
+    {
+        const double* row = X.data() + (size_t) i * (size_t) n;
+        const double ddx = batterDx[(size_t) i], ddy = batterDy[(size_t) i];
+        if (ddx == 0.0 && ddy == 0.0) continue;
+        for (int k = 0; k < n; ++k)
+        {
+            dx[(size_t) k] += ddx * row[k];
+            dy[(size_t) k] += ddy * row[k];
+        }
     }
 }
 

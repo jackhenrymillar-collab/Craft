@@ -67,3 +67,16 @@ mkdir -p "$OUT"
 "$R" --out "$OUT/40_brush_on_plate.wav"     --part Plate --striker Brush --hardness 0.8 --hits 0:1 --length 4
 "$R" --out "$OUT/41_snare_2x_oversampled.wav" --rattles Snare --rattle 0.5 --hardness 0.8 --at 0.3,0 --oversample --length 2
 "$R" --out "$OUT/42_everything.wav"         --attach Box --rattles Snare --loose Rice --loose-amount 0.5 --hardness 0.7 --at 0.3,0 --length 3
+
+# Low end: kick shell (air inside, front head, port), pitch drop and the kick beater.
+# (render_cli takes the first copy of an option, so the shared options leave out the shape.)
+K=(--mount "Kick shell" --shape-b 0.1 --striker Beater --at 0.1,0 --air-mix 0.2)
+"$R" --out "$OUT/43_kick_felt_ported.wav"   "${K[@]}" --shape-a 0.86 --shape-c 0.25 --hardness 0.2 --port 0.3 --pitch-drop 0.25 --hits 0:1 --length 2
+"$R" --out "$OUT/44_kick_felt_sealed.wav"   "${K[@]}" --shape-a 0.86 --shape-c 0.25 --hardness 0.2 --port 0 --pitch-drop 0.25 --hits 0:1 --length 2
+"$R" --out "$OUT/45_kick_plastic_beater.wav" "${K[@]}" --shape-a 0.86 --shape-c 0.25 --hardness 1 --port 0.3 --pitch-drop 0.25 --hits 0:1 --length 2
+"$R" --out "$OUT/46_kick_big_pitch_drop.wav" "${K[@]}" --shape-a 0.86 --shape-c 0.1 --hardness 0.4 --port 0 --pitch-drop 0.8 --hits 0:1 --length 2.5
+"$R" --out "$OUT/47_kick_26in_deep.wav"     "${K[@]}" --shape-a 1 --shape-c 0.25 --shell-depth 0.55 --hardness 0.2 --port 0.2 --pitch-drop 0.4 --hits 0:1 --length 2.5
+"$R" --out "$OUT/48_floor_tom_16in.wav"     --mount "Kick shell" --shape-a 0.59 --shape-b 0.3 --port 0 --shell-depth 0.4 \
+     --hardness 0.5 --at 0.3,0 --air-mix 0.3 --pitch-drop 0.45 --hits 0:1 --length 2.5
+"$R" --out "$OUT/49_kick_pattern.wav"       "${K[@]}" --shape-a 0.86 --shape-c 0.25 --hardness 0.3 --port 0.3 --pitch-drop 0.6 --length 3 \
+     --hits 0:1,0.5:0.5,0.75:0.8,1.25:0.4,1.5:1,2.0:0.7,2.25:1

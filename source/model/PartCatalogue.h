@@ -21,7 +21,7 @@ constexpr int kNumPartTypes = static_cast<int> (PartType::Count);
 // What plays it. Mallet .. Drop are impacts; Brush and Scrape are sweeps across the surface.
 enum class StrikerType
 {
-    Mallet, Hammer, Hand, Drop, Brush, Scrape,
+    Mallet, Hammer, Hand, Drop, Brush, Scrape, Beater,
     Count
 };
 constexpr int kNumStrikerTypes = static_cast<int> (StrikerType::Count);

@@ -152,6 +152,48 @@ Jack chose "Rattles + joining" as the way to get more complex sounds.
   type, rattle type, loose type, oversampling) are state properties, not automatable. Sessions
   from M1/M2 load with no add-ons.
 
+## Low end: kick shell, pitch drop, beater (2026-10-29)
+
+Jack asked for more low-end sounds and picked "kick drum: shell, air + pitch drop".
+
+- **Kick shell = the drum head's second mount** (Hoop / Kick shell), not a new part type, so
+  every head control, material and treatment still applies. It's built in the compile step as
+  `DrumShellBasis`: the batter head's modes, the front head's m = 0 modes (same skin at 85 %
+  tension) and the air plug in the port, coupled by the air inside as one spring,
+  K = diag(ω²) + (ρc²/V) g gᵀ, the same way the Box couples its face to its cavity. New controls:
+  **Depth** (15–60 cm, the air volume) and **Port** (sealed to a hole 45 % of the head's
+  radius), both recompile.
+- **The outside air's mass** loads each head (an unflanged piston's end correction, 0.61 a, as
+  M = I + μ g gᵀ per head; generalised eigenproblem). On a slack 22" head that weight is about
+  the same as the head itself, which is a big part of why a kick sits so low.
+- **The drum breathes:** its net outward flow is minus the change in the air inside, radiated
+  as a small monopole (σ = ρω²U²/8πc, rolling off past ka = 1). That's the main loss of the
+  "both heads in" mode, so a kick's boxy 100–200 Hz breathing dies fast while the low mode
+  (the heads moving together, a weak dipole) carries the boom. The air mic hears the net flow
+  plus the batter's dipoles. Muffle still adds damping on top.
+- **The port's air mode often lands below 20 Hz** (compliant heads soften the air spring), so the
+  port mostly shortens the breathing mode and leaks energy (Q 6). The UI's "f0" now shows the
+  lowest mode at or above 20 Hz.
+- **Choosing Kick shell** sets a starting point: 22", slack (641 N/m), 25 % muffle, Beater.
+- **Pitch drop (live, all drum heads):** tension modulation (Kirchhoff–Carrier / Berger). The
+  head's stretch is Σ(ω²q² + v²)/2 / (2 A T0) over the exact modes (cycle-averaged, so it glides
+  instead of fluttering at 2f), and the tension rises by E h / (2(1 − ν)) times that (Mylar
+  4.5 GPa, Hide 1.2 GPa, Paper 4 GPa). Every 16 samples that gives a frequency ratio r; each
+  sample every mode's (ωq, v) is rotated by the extra phase (r − 1) ω dt. A rotation keeps each
+  mode's energy exactly, so the glide can't destabilise anything, and it's skipped while the
+  striker is on the head so the knob doesn't change how much energy a hit puts in. 25 % is the
+  real head's own physics (a hard kick: about 3 % sharp, falling over 0.5 s); 100 % exaggerates
+  it a hundredfold, soft-limited to an octave. Off at 0. Default 25 %.
+- **Beater striker** (appended to the striker list): 60 g at the head, felt (soft,
+  α = 2.2, lossy) to plastic (α = 1.6, 50× stiffer). On a slack head the contact time is set by
+  the head (~21 ms either way), so hardness is heard as attack brightness, not length.
+- **CPU:** a kick costs about the same as a plain drum (3–4 % of a core here); pitch drop adds
+  a rotation per mode per sample (+0.5–1 %). The glide's angles use a renormalised Taylor
+  series instead of cos/sin.
+- **Not done:** a true dipole near-field (proximity effect) for the air mic, so a close air mic
+  is less bassy than a real one; for now the contact mic (Air mix towards 0) is the "inside
+  the kick" sound.
+
 ## Open questions (defaults taken, see brief §8)
 
 1. OS/DAW: macOS first (answered). Which DAWs to test first is still open; default: Logic (AU)
