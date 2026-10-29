@@ -45,9 +45,25 @@ void PartView::timerCallback()
         repaint();
 }
 
-PartView::Mapping PartView::mapping() const
+juce::Rectangle<float> PartView::partArea() const
 {
     auto r = getLocalBounds().toFloat().reduced (18.0f).withTrimmedBottom (22.0f);
+    if (snap.attached)
+        r.removeFromRight (r.getWidth() * 0.3f);
+    return r;
+}
+
+juce::Rectangle<float> PartView::attachArea() const
+{
+    if (! snap.attached)
+        return {};
+    auto r = getLocalBounds().toFloat().reduced (18.0f).withTrimmedBottom (22.0f);
+    return r.removeFromRight (r.getWidth() * 0.26f);
+}
+
+PartView::Mapping PartView::mapping() const
+{
+    auto r = partArea();
     Mapping m;
     m.centre = r.getCentre();
     const double hx = juce::jmax (1e-4, snap.halfExtents.x), hy = juce::jmax (1e-4, snap.round ? snap.halfExtents.x : snap.halfExtents.y);
@@ -449,6 +465,174 @@ void PartView::drawFeatures (juce::Graphics& g, const Mapping& m) const
     g.strokePath (cracks, juce::PathStrokeType (1.4f));
 }
 
+void PartView::drawContacts (juce::Graphics& g, const Mapping& m, bool underneath) const
+{
+    if (snap.contacts.empty())
+        return;
+    if (underneath)
+    {
+        // Snare: a band of fine wires across the underside, between two end plates.
+        double x0 = 1e9, x1 = -1e9, yc = 0.0;
+        int wires = 0;
+        for (const auto& c : snap.contacts)
+            if (c.kind == ContactSite::Kind::Wire)
+            {
+                x0 = std::min (x0, c.p.x);
+                x1 = std::max (x1, c.p.x);
+                yc += c.p.y;
+                ++wires;
+            }
+        if (wires == 0)
+            return;
+        yc /= wires;
+        const double he = snap.round ? snap.halfExtents.x : snap.halfExtents.y;
+        const double span = 0.16 * he;
+        const auto a = m.toScreen ({ x0 - 0.06 * snap.halfExtents.x, yc }), b = m.toScreen ({ x1 + 0.06 * snap.halfExtents.x, yc });
+        const float h = (float) (span * m.sy);
+        const float dashes[] = { 5.0f, 3.0f };
+        for (int i = 0; i < 14; ++i)
+        {
+            const float y = a.y - h + 2.0f * h * (float) i / 13.0f;
+            juce::Path line;
+            line.startNewSubPath (a.x, y);
+            line.lineTo (b.x, y);
+            juce::Path dashed;
+            juce::PathStrokeType (1.0f).createDashedStroke (dashed, line, dashes, 2);
+            g.setColour (juce::Colour (0xffc9cbc4).withAlpha (0.35f));
+            g.fillPath (dashed);
+        }
+        g.setColour (juce::Colour (0xff8d8f88).withAlpha (0.5f));
+        g.fillRect (juce::Rectangle<float> (a.x - 3.0f, a.y - h - 3.0f, 6.0f, 2.0f * h + 6.0f));
+        g.fillRect (juce::Rectangle<float> (b.x - 3.0f, b.y - h - 3.0f, 6.0f, 2.0f * h + 6.0f));
+        return;
+    }
+
+    juce::Path chain;
+    bool chainStarted = false;
+    int i = 0;
+    for (const auto& c : snap.contacts)
+    {
+        const auto p = m.toScreen (c.p);
+        ++i;
+        if (c.kind == ContactSite::Kind::Wire)
+            continue;
+        if (c.kind == ContactSite::Kind::Link)
+        {
+            if (! chainStarted) { chain.startNewSubPath (p); chainStarted = true; }
+            else chain.lineTo (p);
+            continue;
+        }
+        if (c.kind == ContactSite::Kind::Rivet)
+        {
+            // Sizzle rivet sitting loose in its hole.
+            g.setColour (juce::Colour (0xffc9a45c));
+            g.fillEllipse (p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f);
+            g.setColour (juce::Colour (0xff5a4520));
+            g.drawEllipse (p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f, 1.0f);
+            g.fillEllipse (p.x - 1.5f, p.y - 1.5f, 3.0f, 3.0f);
+            continue;
+        }
+        // Grains.
+        const float a = 1.7f * (float) i;
+        switch (snap.loose)
+        {
+            case LooseType::Rice:
+                for (int k = 0; k < 3; ++k)
+                {
+                    const auto q = p.translated (5.0f * std::cos (a + 2.1f * k), 5.0f * std::sin (a + 2.1f * k));
+                    juce::Path grain;
+                    grain.addEllipse (-3.5f, -1.4f, 7.0f, 2.8f);
+                    grain.applyTransform (juce::AffineTransform::rotation (a + 1.3f * k).translated (q));
+                    g.setColour (juce::Colour (0xffeee6cf));
+                    g.fillPath (grain);
+                }
+                break;
+            case LooseType::Beads:
+                g.setGradientFill (juce::ColourGradient (juce::Colour (0xffd9eef0), p.x - 2, p.y - 2, juce::Colour (0xff4f8f99), p.x + 3, p.y + 3, true));
+                g.fillEllipse (p.x - 4.0f, p.y - 4.0f, 8.0f, 8.0f);
+                break;
+            case LooseType::Sand:
+                g.setColour (juce::Colour (0xffd8c08a).withAlpha (0.8f));
+                for (int k = 0; k < 7; ++k)
+                    g.fillEllipse (p.x + 7.0f * std::cos (a * (k + 1)), p.y + 7.0f * std::sin (a * (k + 2)), 1.8f, 1.8f);
+                break;
+            case LooseType::Chain: case LooseType::None: case LooseType::Count:
+                break;
+        }
+    }
+    if (chainStarted)
+    {
+        // Links along the path.
+        g.setColour (juce::Colour (0xffb4b5ae));
+        g.strokePath (chain, juce::PathStrokeType (1.0f));
+        const float len = chain.getLength();
+        for (float d = 0.0f; d < len; d += 9.0f)
+        {
+            const auto q = chain.getPointAlongPath (d);
+            const auto q2 = chain.getPointAlongPath (juce::jmin (len, d + 1.0f));
+            const float ang = std::atan2 (q2.y - q.y, q2.x - q.x);
+            juce::Path link;
+            const bool flat = ((int) (d / 9.0f) % 2) == 0;
+            link.addRoundedRectangle (-5.5f, flat ? -3.0f : -1.2f, 11.0f, flat ? 6.0f : 2.4f, flat ? 3.0f : 1.2f);
+            link.applyTransform (juce::AffineTransform::rotation (ang).translated (q));
+            g.setColour (juce::Colour (0xffb4b5ae));
+            g.strokePath (link, juce::PathStrokeType (1.5f));
+        }
+    }
+}
+
+void PartView::drawAttachment (juce::Graphics& g, const Mapping& m) const
+{
+    if (! snap.attached)
+        return;
+    const auto area = attachArea();
+    // Same scale as the main part when it fits, smaller otherwise.
+    const double hx = std::max (1e-4, snap.attachHalfExtents.x);
+    const double hy = std::max (1e-4, snap.attachRound ? hx : snap.attachHalfExtents.y);
+    const float s = (float) std::min ({ (double) m.sx, area.getWidth() / (2.2 * hx), area.getHeight() / (2.6 * hy) });
+    const float w = (float) (2.0 * hx) * s, h = std::max (10.0f, (float) (2.0 * hy) * s);
+    const auto body = juce::Rectangle<float> (w, h).withCentre (area.getCentre());
+
+    // Connector from the joint on the main part to the joined part.
+    const auto j = m.toScreen (snap.jointMain);
+    const auto target = body.getConstrainedPoint (j);
+    g.setColour (snap.joint == JointType::Bolt ? juce::Colour (0xff8d8f88) : juce::Colour (0xff1d1d1b));
+    g.drawLine ({ j, target }, snap.joint == JointType::Bolt ? 3.0f : 5.0f);
+
+    juce::Path p;
+    if (snap.attachRound)
+        p.addEllipse (body);
+    else
+        p.addRoundedRectangle (body, snap.attachPart == PartType::Tube || snap.attachPart == PartType::Spring ? h * 0.5f : 3.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    g.fillPath (p, juce::AffineTransform::translation (3.0f, 5.0f));
+    const auto c = materialColour (snap.attachMaterial);
+    g.setGradientFill (juce::ColourGradient (c.brighter (0.2f), body.getTopLeft(), c.darker (0.3f), body.getBottomRight(), false));
+    g.fillPath (p);
+    g.setColour (juce::Colours::black.withAlpha (0.4f));
+    g.strokePath (p, juce::PathStrokeType (1.0f));
+    if (snap.attachPart == PartType::Box)
+    {
+        const float d = juce::jmin (w, h) * 0.3f;
+        g.setColour (juce::Colour (0xff1d1d1b));
+        g.fillEllipse (juce::Rectangle<float> (d, d).withCentre (body.getCentre()));
+    }
+    g.setColour (snap.joint == JointType::Bolt ? juce::Colour (0xffb4b5ae) : juce::Colour (0xff1d1d1b));
+    g.fillEllipse (target.x - 4, target.y - 4, 8, 8);
+
+    // Name tag.
+    const auto txt = juce::String (getMaterial (snap.attachMaterial).name.data()) + " " + juce::String (partInfo (snap.attachPart).name.data());
+    auto f = mono (10.5f);
+    const float tw = juce::GlyphArrangement::getStringWidth (f, txt) + 12.0f;
+    auto tag = juce::Rectangle<float> (tw, 18.0f).withCentre ({ body.getCentreX(), body.getBottom() + 16.0f });
+    tag = tag.constrainedWithin (getLocalBounds().toFloat().reduced (2.0f));
+    g.setColour (colour::bg.withAlpha (0.85f));
+    g.fillRoundedRectangle (tag, radiusSmall);
+    g.setFont (f);
+    g.setColour (colour::text);
+    g.drawText (txt, tag, juce::Justification::centred);
+}
+
 void PartView::mouseDown (const juce::MouseEvent& e)
 {
     const auto m = mapping();
@@ -480,14 +664,31 @@ void PartView::paint (juce::Graphics& g)
 
     const auto m = mapping();
     const auto body = bodyPath (m);
+    drawAttachment (g, m);
     drawUnder (g, m, body);
     {
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (body);
         drawSurface (g, m, body);
+        drawContacts (g, m, true); // snare wires show through faintly from underneath
         drawFeatures (g, m);
     }
     drawOver (g, m, body);
+    drawContacts (g, m, false);
+    if (snap.attached)
+    {
+        // The joint itself: a bolt head or a rubber grommet.
+        const auto j = m.toScreen (snap.jointMain);
+        if (snap.joint == JointType::Bolt)
+            drawScrew (g, j, 5.0f);
+        else
+        {
+            g.setColour (juce::Colour (0xff1d1d1b));
+            g.fillEllipse (j.x - 7, j.y - 7, 14, 14);
+            g.setColour (juce::Colour (0xff4a4a45));
+            g.drawEllipse (j.x - 4, j.y - 4, 8, 8, 1.5f);
+        }
+    }
 
     // Contact mic: a small puck stuck to the part.
     {

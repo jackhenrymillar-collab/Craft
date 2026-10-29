@@ -37,6 +37,10 @@ private:
     void drawSurface (juce::Graphics& g, const Mapping& m, const juce::Path& body) const;
     void drawOver (juce::Graphics& g, const Mapping& m, const juce::Path& body) const;
     void drawFeatures (juce::Graphics& g, const Mapping& m) const;
+    void drawContacts (juce::Graphics& g, const Mapping& m, bool underneath) const;
+    void drawAttachment (juce::Graphics& g, const Mapping& m) const;
+    juce::Rectangle<float> partArea() const;   // where the main part is drawn
+    juce::Rectangle<float> attachArea() const; // where a joined part is drawn (empty if none)
 
     FoundryProcessor& proc;
     InstrumentSnapshot snap;

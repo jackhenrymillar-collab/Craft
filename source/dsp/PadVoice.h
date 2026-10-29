@@ -105,6 +105,7 @@ private:
     // Rattles and loose objects (one entry per ContactSite of the active instrument).
     std::array<double, kMaxContacts> elemY {}, elemV {}, elemPrevF {}, elemPen {},
         elemRest {}, elemStaticF {}, elemStaticPen {};
+    std::array<double, kMaxModes> contactFree {};
     int touching = 0;
     double rattleNow = -1.0;     // the Rattle setting the rest positions were computed for
     double clickState = 0.0, clickLowpass = 0.0;

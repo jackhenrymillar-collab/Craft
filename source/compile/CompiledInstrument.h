@@ -18,7 +18,7 @@ namespace foundry
 // by a spring to a rest position. Coordinates: positive = down (into the part from above).
 struct ContactSite
 {
-    enum class Kind { Wire, Rivet, Grain };
+    enum class Kind { Wire, Rivet, Grain, Link };
     Kind kind = Kind::Grain;
     Vec2 p;                  // on the main part, part-local metres
     double side = 1.0;       // +1 rests on top (presses down), -1 underneath (presses up)
@@ -47,10 +47,10 @@ struct CompiledInstrument
     std::vector<double> attachX;
     Vec2 jointMain, jointAttach;
 
-    // Rattles and loose objects: sites plus their shapes over the lowest contactModes modes.
+    // Rattles and loose objects: sites plus their shapes over the modes (contactModes = n).
     std::vector<ContactSite> contacts;
     int contactModes = 0;
-    std::vector<double> contactShapes;           // contacts.size() x contactModes
+    std::vector<double> contactShapes;           // contacts.size() x n
 
     // Above the exact modes, a 2-D part's modes get too dense to solve one by one, so each
     // high band is represented by one mode standing in for `count` real ones: it gets

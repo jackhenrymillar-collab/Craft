@@ -215,11 +215,33 @@ TEST_CASE ("Rattles and loose objects stay bounded under the hardest hits", "[co
     CHECK (rms (r.left, 48000.0, 2.2, 2.5) < 0.5 * rms (r.left, 48000.0, 0.4, 0.7));
 }
 
+TEST_CASE ("A tight or loose snare dies away completely", "[contacts][snare]")
+{
+    // Ten preloaded wires all touching the head are the hardest case for the contact solver:
+    // solved independently they fed each other into a steady 775 Hz buzz.
+    const double rattle = GENERATE (0.0, 0.1, 0.5, 1.0);
+    const bool oversample = GENERATE (false, true);
+    auto spec = test::defaultSpec();
+    spec.rattle.type = RattleType::Snare;
+    spec.oversample = oversample;
+    const auto ci = compileInstrument (spec, 48000.0);
+    PadParams p;
+    p.rattle = rattle;
+    p.hardness = 0.8;
+    const auto r = test::renderHits (*ci, p, { { 0.05, 0.9 } }, 3.0);
+    INFO ("rattle " << rattle << " oversample " << oversample);
+    REQUIRE (allFinite (r));
+    const double early = rms (r.left, 48000.0, 0.05, 0.15);
+    const double late = rms (r.left, 48000.0, 2.5, 3.0);
+    CHECK (late < 1e-4 * early);
+}
+
 TEST_CASE ("Loose objects come to rest on the part", "[contacts][loose]")
 {
     const LooseType type = GENERATE (LooseType::Rice, LooseType::Beads, LooseType::Chain);
+    // On the drum head (about 1 s of ring): on a hung plate that rings for 20 s the part
+    // itself keeps kicking them.
     auto spec = test::defaultSpec();
-    spec.part = PartSpec::defaultFor (PartType::Plate);
     spec.loose.type = type;
     const auto ci = compileInstrument (spec, 48000.0);
     PadVoice v;
@@ -234,7 +256,7 @@ TEST_CASE ("Loose objects come to rest on the part", "[contacts][loose]")
         if (i == 20)
             early = v.contactEnergy();
     }
-    INFO ("early " << early << " late " << v.contactEnergy());
+    INFO ("type " << (int) type << " early " << early << " late " << v.contactEnergy());
     CHECK (v.contactEnergy() < 1e-3 * early + 1e-12);
     for (size_t j = 0; j < ci->contacts.size(); ++j)
         CHECK (std::abs (v.contactPosition ((int) j)) < 0.01);

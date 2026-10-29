@@ -369,7 +369,7 @@ std::vector<ContactSite> layoutContacts (const InstrumentSpec& spec, const Modal
             const double fw = 140.0 + 25.0 * (j % 3);  // slightly different wire tensions
             c.tetherK = c.mass * std::pow (2.0 * kPi * fw, 2.0);
             c.tetherDamping = 2.0 * 0.04 * std::sqrt (c.tetherK * c.mass);
-            law (c, 30.0, 1.5, 0.3);
+            law (c, 1000.0, 1.5, 1.0);
             c.gapTight = -2.5e-4;
             c.gapLoose = 3.5e-4;
             out.push_back (c);
@@ -406,12 +406,12 @@ std::vector<ContactSite> layoutContacts (const InstrumentSpec& spec, const Modal
         proto.gravity = 9.81;
         switch (L.type)
         {
-            case LooseType::Rice:  maxCount = 24; proto.mass = 1e-4; law (proto, 150.0, 1.5, 1.5); break;   // clumps of a few grains
+            case LooseType::Rice:  maxCount = 16; proto.mass = 1e-4; law (proto, 150.0, 1.5, 1.5); break;   // clumps of a few grains
             case LooseType::Beads: maxCount = 12; proto.mass = 5e-4; law (proto, 4000.0, 1.5, 0.05); break;  // glass: lively
-            case LooseType::Sand:  maxCount = 32; proto.mass = 4e-5; law (proto, 15.0, 1.5, 6.0); break;     // soft, dead
+            case LooseType::Sand:  maxCount = 20; proto.mass = 4e-5; law (proto, 15.0, 1.5, 6.0); break;     // soft, dead
             case LooseType::Chain:
                 maxCount = 10; proto.mass = 2e-3; law (proto, 1500.0, 1.5, 0.2);
-                proto.kind = ContactSite::Kind::Rivet;   // links are held together
+                proto.kind = ContactSite::Kind::Link;    // links are held together
                 proto.tetherK = 30.0;
                 proto.tetherDamping = 0.02;
                 break;
@@ -668,21 +668,33 @@ std::unique_ptr<CompiledInstrument> compileInstrument (const InstrumentSpec& spe
 
     // ---- Rattles and loose objects ------------------------------------------------------
     ci->contacts = layoutContacts (spec, basis);
-    ci->contactModes = std::min (nC, kMaxContactModes);
+    ci->contactModes = n; // solved against every mode, so the clicks' energy is accounted for
     if (! ci->contacts.empty())
     {
+        // Shapes over every mode, the high band included: that's where a snare's buzz and the
+        // rattle of rice live. The high band stands in for many modes, so each site gets its
+        // own random signs there (they add up incoherently across sites).
         const int m = ci->contactModes;
-        ci->contactShapes.assign (ci->contacts.size() * (size_t) m, 0.0);
+        ci->contactShapes.assign (ci->contacts.size() * (size_t) n, 0.0);
         std::vector<double> sh (nz), scratch (std::max<std::size_t> (nz, (size_t) kMaxModes));
         for (size_t j = 0; j < ci->contacts.size(); ++j)
         {
             auto& c = ci->contacts[j];
             ci->shapeAt (c.p, sh.data(), scratch.data());
+            double* row = ci->contactShapes.data() + j * (size_t) n;
             double comp = 0.0;
-            for (int k = 0; k < m; ++k)
+            for (int k = 0; k < n; ++k)
             {
-                ci->contactShapes[j * (size_t) m + (size_t) k] = sh[(size_t) k];
-                comp += sh[(size_t) k] * sh[(size_t) k] * ci->b1[(size_t) k];
+                double v = sh[(size_t) k];
+                if (k >= ci->nExact)
+                    v *= hashSign ((std::uint64_t) j * 1009ull + (std::uint64_t) k, 0x5eedull);
+                // Not the top octave: a force that changes every sample can feed modes that
+                // turn half a cycle per step (and a buzz up there isn't heard as such).
+                if (ci->b1[(size_t) k] == 0.0 || ci->omega[(size_t) k] > 0.5 * kPi * sampleRate)
+                    v = 0.0;
+                row[k] = v;
+                if (k < m)
+                    comp += v * v * ci->b1[(size_t) k];
             }
             c.compliance = comp;
         }

@@ -66,22 +66,30 @@ void ModalBank::stepForces (const double* modalForce) noexcept
     }
 }
 
-double ModalBank::predictFreePartial (const double* shape, int m) const noexcept
+void ModalBank::predictFreeModes (double* out, int m) const noexcept
 {
     const double* a11 = inst->a11.data();
     const double* a12 = inst->a12.data();
-    double s = 0.0;
+    const double* qq = q.data();
+    const double* vv = v.data();
     for (int k = 0; k < m; ++k)
-        s += shape[k] * (a11[k] * q[(size_t) k] + a12[k] * v[(size_t) k]);
-    return s;
+        out[k] = a11[k] * qq[k] + a12[k] * vv[k];
 }
 
-double ModalBank::velocityPartial (const double* shape, int m) const noexcept
+double ModalBank::dot (const double* a, const double* b, int m) noexcept
 {
-    double s = 0.0;
-    for (int k = 0; k < m; ++k)
-        s += shape[k] * v[(size_t) k];
-    return s;
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int k = 0;
+    for (; k + 4 <= m; k += 4)
+    {
+        s0 += a[k] * b[k];
+        s1 += a[k + 1] * b[k + 1];
+        s2 += a[k + 2] * b[k + 2];
+        s3 += a[k + 3] * b[k + 3];
+    }
+    for (; k < m; ++k)
+        s0 += a[k] * b[k];
+    return (s0 + s1) + (s2 + s3);
 }
 
 void ModalBank::stepFree() noexcept

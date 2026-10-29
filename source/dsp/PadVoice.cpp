@@ -259,13 +259,22 @@ double PadVoice::processContacts (double* fm) noexcept
 {
     const auto* ci = active.instrument();
     const int m = ci->contactModes;
+    const int n = ci->n;
     const auto nc = ci->contacts.size();
     double click = 0.0;
     int touchingNow = 0;
+    // Where the modes would go this step with the forces applied so far (the striker, a
+    // sweep). Each contact is solved against it and then adds its own force, so the next one
+    // sees it (Gauss-Seidel): solving them all against the same prediction couples them
+    // explicitly, and ten tight snare wires then feed each other into a steady buzz.
+    const double* b1 = ci->b1.data();
+    active.predictFreeModes (contactFree.data(), m);
+    for (int k = 0; k < m; ++k)
+        contactFree[(size_t) k] += b1[k] * fm[k];
     for (size_t j = 0; j < nc; ++j)
     {
         const auto& c = ci->contacts[j];
-        const double* phi = ci->contactShapes.data() + j * (size_t) m;
+        const double* phi = ci->contactShapes.data() + j * (size_t) n;
         const double side = c.side;
 
         // Free motion of the element this step (gravity and its tether, explicit).
@@ -275,28 +284,37 @@ double PadVoice::processContacts (double* fm) noexcept
         const double vFree = elemV[j] + dt * a;
         const double yFree = elemY[j] + dt * vFree;
 
-        // Where the surface would be with no contact force.
-        const double wFree = active.predictFreePartial (phi, m);
-        const double delta0 = side * (yFree - wFree) + 0.0;
+        // Where the surface would be with no force from this contact. The surface only feels
+        // the change from the resting load (F - Fs), so the compression at the end of the
+        // step is delta0 + C Fs - (dt^2/m + C) F.
+        const double wFree = ModalBank::dot (phi, contactFree.data(), m);
+        const double delta0 = side * (yFree - wFree) + c.compliance * elemStaticF[j];
+        const double cTot = dt * dt / c.mass + c.compliance;
         double F = 0.0;
         if (delta0 > 0.0)
         {
-            const double cTot = dt * dt / c.mass + c.compliance;
             F = Striker::solveContact (delta0, cTot, c.K, c.alpha, c.lambda, elemPen[j], dt);
             ++touchingNow;
         }
         // Element: pushed back by the contact.
         elemV[j] = vFree - side * dt * F / c.mass;
         elemY[j] = yFree - side * dt * dt * F / c.mass;
-        elemPen[j] = delta0 - (dt * dt / c.mass + c.compliance) * F;
+        elemPen[j] = delta0 - cTot * F;
 
-        // Surface: the change from the resting load.
+        // Surface: the change from the resting load, seen by the contacts after this one.
         const double dF = F - elemStaticF[j];
         if (dF != 0.0)
         {
             const double fs = side * dF;
-            for (int k = 0; k < m; ++k)
-                fm[k] += fs * phi[k];
+            double* __restrict out = fm;
+            double* __restrict pred = contactFree.data();
+            const double* __restrict sh = phi;
+            for (int k = 0; k < n; ++k)
+            {
+                const double f = fs * sh[k];
+                out[k] += f;
+                pred[k] += b1[k] * f;
+            }
         }
         click += side * (F - elemPrevF[j]);
         elemPrevF[j] = F;

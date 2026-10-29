@@ -38,6 +38,13 @@ inline constexpr const char* punctureSize = "p1_punctureSize";
 inline constexpr const char* puncturePlacement = "p1_puncturePlacement";
 inline constexpr const char* punctureScatter = "p1_punctureScatter";
 inline constexpr const char* punctureRagged = "p1_punctureRagged";
+
+// Add-ons (M3). Rattle is live; the rest reshape the modes.
+inline constexpr const char* rattle = "p1_rattle";
+inline constexpr const char* looseAmount = "p1_looseAmount";
+inline constexpr const char* jointStiffness = "p1_jointStiffness";
+inline constexpr const char* attachSize = "p1_attachSize";
+inline constexpr const char* attachPlace = "p1_attachPlace";
 } // namespace id
 
 // Parameters whose change needs a recompile (they reshape the modes).
@@ -51,5 +58,11 @@ inline const juce::Identifier material { "material" };
 inline const juce::Identifier mount { "mount" };
 inline const juce::Identifier striker { "striker" };
 inline const juce::Identifier headMaterial { "headMaterial" }; // M1 sessions: membrane material
+inline const juce::Identifier attachPart { "attachPart" };         // "None" or a part name
+inline const juce::Identifier attachMaterial { "attachMaterial" };
+inline const juce::Identifier joint { "joint" };
+inline const juce::Identifier rattleType { "rattleType" };
+inline const juce::Identifier looseType { "looseType" };
+inline const juce::Identifier oversample { "oversample" };
 
 } // namespace foundry::params

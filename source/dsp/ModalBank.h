@@ -26,9 +26,10 @@ public:
     void stepFree() noexcept;
     // Advance one sample with a force already projected onto the modes (size n).
     void stepForces (const double* modalForce) noexcept;
-    // predictFree / velocityAt over only the first m modes (contacts).
-    [[nodiscard]] double predictFreePartial (const double* shape, int m) const noexcept;
-    [[nodiscard]] double velocityPartial (const double* shape, int m) const noexcept;
+    // Free displacement of the lowest m modes after one step (for many contacts at once).
+    void predictFreeModes (double* out, int m) const noexcept;
+    // sum a[k] b[k], k < m (four accumulators, so it pipelines).
+    static double dot (const double* a, const double* b, int m) noexcept;
 
     [[nodiscard]] double displacementAt (const double* shape) const noexcept;
     [[nodiscard]] double velocityAt (const double* shape) const noexcept;

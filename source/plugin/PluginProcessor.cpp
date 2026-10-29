@@ -17,6 +17,7 @@ FoundryProcessor::FoundryProcessor()
     live.pan = apvts.getRawParameterValue (params::id::pan);
     live.airMix = apvts.getRawParameterValue (params::id::airMix);
     live.micDistance = apvts.getRawParameterValue (params::id::micDistance);
+    live.rattle = apvts.getRawParameterValue (params::id::rattle);
 
     for (auto* p : getParameters())
         if (auto* wp = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
@@ -27,6 +28,7 @@ FoundryProcessor::FoundryProcessor()
     apvts.state.setProperty (params::material, juce::String (foundry::getMaterial (MaterialId::Mylar).name.data()), nullptr);
     apvts.state.setProperty (params::mount, 0, nullptr);
     apvts.state.setProperty (params::striker, juce::String (strikerInfo (StrikerType::Mallet).name.data()), nullptr);
+    migrateState(); // fills in the add-on properties
     apvts.state.addListener (this);
 
     worker = std::make_unique<CompileWorker> (exchange);
@@ -45,6 +47,21 @@ FoundryProcessor::FoundryProcessor()
         s.solveMs = ci.solveMilliseconds;
         s.fundamentalHz = ci.n > 0 ? ci.omega[0] / juce::MathConstants<double>::twoPi : 0.0;
         s.version = ci.version;
+        s.attached = ci.hasAttachment();
+        if (s.attached)
+        {
+            s.attachPart = ci.attachBasis->type();
+            s.attachHalfExtents = ci.attachBasis->halfExtents();
+            s.attachRound = ci.attachBasis->isRound();
+            s.attachMaterial = ci.spec.attach.part.material;
+            s.joint = ci.spec.attach.joint;
+            s.jointMain = ci.jointMain;
+        }
+        s.rattle = ci.spec.rattle.type;
+        s.loose = ci.spec.loose.type;
+        for (const auto& c : ci.contacts)
+            s.contacts.push_back ({ c.p, c.kind, c.side < 0.0 });
+        s.oversampled = ci.oversample > 1;
         {
             std::lock_guard g (snapshotLock);
             snapshot = std::move (s);
@@ -95,6 +112,21 @@ InstrumentSpec FoundryProcessor::buildSpec() const
     t.puncture.placement = get (params::id::puncturePlacement);
     t.puncture.scatter = get (params::id::punctureScatter);
     t.puncture.ragged = get (params::id::punctureRagged);
+
+    if (const auto at = getAttachPart())
+    {
+        s.attach.enabled = true;
+        s.attach.part = PartSpec::defaultFor (*at);
+        s.attach.part.material = getAttachMaterial();
+        s.attach.part.shape[0] = get (params::id::attachSize);
+        s.attach.joint = getJoint();
+        s.attach.stiffness = get (params::id::jointStiffness);
+        s.attach.place = get (params::id::attachPlace);
+    }
+    s.rattle.type = getRattleType();
+    s.loose.type = getLooseType();
+    s.loose.amount = get (params::id::looseAmount);
+    s.oversample = getOversample();
     return s;
 }
 
@@ -134,6 +166,7 @@ PadParams FoundryProcessor::readLiveParams() const noexcept
     p.pan = live.pan->load();
     p.airMix = live.airMix->load();
     p.micDistance = live.micDistance->load();
+    p.rattle = live.rattle->load();
     p.striker = (StrikerType) juce::jlimit (0, kNumStrikerTypes - 1, strikerType.load (std::memory_order_relaxed));
     return p;
 }
@@ -145,7 +178,7 @@ void FoundryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     if (auto* fresh = exchange.take())
     {
-        if (juce::approximatelyEqual (fresh->sampleRate, currentSampleRate))
+        if (juce::approximatelyEqual (fresh->sampleRate / fresh->oversample, currentSampleRate))
             voice.setInstrument (fresh);
         else
         {
@@ -301,6 +334,67 @@ StrikerType FoundryProcessor::getStriker() const
     return strikerFromName (apvts.state.getProperty (params::striker).toString().toStdString(), StrikerType::Mallet);
 }
 
+namespace
+{
+juce::String nameOf (std::string_view v) { return juce::String (v.data(), v.size()); }
+} // namespace
+
+void FoundryProcessor::setAttachPart (std::optional<PartType> t)
+{
+    if (t == getAttachPart())
+        return;
+    auto& st = apvts.state;
+    if (! t)
+    {
+        st.setProperty (params::attachPart, "None", nullptr);
+        return;
+    }
+    const auto& info = partInfo (*t);
+    st.setProperty (params::attachMaterial, nameOf (foundry::getMaterial (info.defaultMaterial).name), nullptr);
+    if (auto* p = apvts.getParameter (params::id::attachSize))
+        p->setValueNotifyingHost ((float) info.controls[0].defaultNormalised());
+    st.setProperty (params::attachPart, nameOf (info.name), nullptr);
+}
+
+std::optional<PartType> FoundryProcessor::getAttachPart() const
+{
+    const auto name = apvts.state.getProperty (params::attachPart, "None").toString();
+    if (name.isEmpty() || name == "None")
+        return std::nullopt;
+    return partFromName (name.toStdString(), PartType::Box);
+}
+
+void FoundryProcessor::setAttachMaterial (MaterialId m)
+{
+    if (const auto t = getAttachPart(); t && materialAllowed (*t, m))
+        apvts.state.setProperty (params::attachMaterial, nameOf (foundry::getMaterial (m).name), nullptr);
+}
+
+MaterialId FoundryProcessor::getAttachMaterial() const
+{
+    const auto t = getAttachPart().value_or (PartType::Box);
+    const auto m = materialFromName (apvts.state.getProperty (params::attachMaterial).toString().toStdString(), partInfo (t).defaultMaterial);
+    return materialAllowed (t, m) ? m : partInfo (t).defaultMaterial;
+}
+
+void FoundryProcessor::setJoint (JointType t) { apvts.state.setProperty (params::joint, nameOf (jointInfo (t).name), nullptr); }
+JointType FoundryProcessor::getJoint() const
+{
+    return jointFromName (apvts.state.getProperty (params::joint).toString().toStdString(), JointType::Bolt);
+}
+void FoundryProcessor::setRattleType (RattleType t) { apvts.state.setProperty (params::rattleType, nameOf (rattleInfo (t).name), nullptr); }
+RattleType FoundryProcessor::getRattleType() const
+{
+    return rattleFromName (apvts.state.getProperty (params::rattleType).toString().toStdString(), RattleType::None);
+}
+void FoundryProcessor::setLooseType (LooseType t) { apvts.state.setProperty (params::looseType, nameOf (looseInfo (t).name), nullptr); }
+LooseType FoundryProcessor::getLooseType() const
+{
+    return looseFromName (apvts.state.getProperty (params::looseType).toString().toStdString(), LooseType::None);
+}
+void FoundryProcessor::setOversample (bool on) { apvts.state.setProperty (params::oversample, on, nullptr); }
+bool FoundryProcessor::getOversample() const { return (bool) apvts.state.getProperty (params::oversample, false); }
+
 void FoundryProcessor::migrateState()
 {
     // M1 sessions had one drum and stored its head material as "headMaterial".
@@ -311,6 +405,13 @@ void FoundryProcessor::migrateState()
         st.setProperty (params::material, st.getProperty (params::headMaterial, "Mylar"), nullptr);
     if (! st.hasProperty (params::striker))
         st.setProperty (params::striker, juce::String (strikerInfo (StrikerType::Mallet).name.data()), nullptr);
+    // M1/M2 sessions have no add-ons.
+    if (! st.hasProperty (params::attachPart)) st.setProperty (params::attachPart, "None", nullptr);
+    if (! st.hasProperty (params::attachMaterial)) st.setProperty (params::attachMaterial, "Oak", nullptr);
+    if (! st.hasProperty (params::joint)) st.setProperty (params::joint, nameOf (jointInfo (JointType::Bolt).name), nullptr);
+    if (! st.hasProperty (params::rattleType)) st.setProperty (params::rattleType, nameOf (rattleInfo (RattleType::None).name), nullptr);
+    if (! st.hasProperty (params::looseType)) st.setProperty (params::looseType, nameOf (looseInfo (LooseType::None).name), nullptr);
+    if (! st.hasProperty (params::oversample)) st.setProperty (params::oversample, false, nullptr);
     strikerType = (int) getStriker();
 }
 
@@ -327,7 +428,9 @@ void FoundryProcessor::parameterChanged (const juce::String&, float)
 
 void FoundryProcessor::valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier& prop)
 {
-    if (prop == params::partType || prop == params::material || prop == params::mount)
+    if (prop == params::partType || prop == params::material || prop == params::mount || prop == params::attachPart
+        || prop == params::attachMaterial || prop == params::joint || prop == params::rattleType || prop == params::looseType
+        || prop == params::oversample)
         specDirty = true;
     else if (prop == params::striker)
         strikerType = (int) getStriker();
